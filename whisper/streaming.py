@@ -242,6 +242,16 @@ class StreamingTranscriber:
         # Compute mel spectrogram — proportional to actual duration, no padding
         mel = log_mel_spectrogram_chunk(audio, n_mels=self._n_mels)
 
+        # Pad very short segments to a minimum of 3 seconds (300 frames)
+        # to give the encoder enough context for stable decoding.
+        # This is far less wasteful than the 30s (3000 frame) padding
+        # that faster-whisper applies to ALL segments.
+        import torch
+
+        min_frames = 300  # ~3 seconds
+        if mel.shape[-1] < min_frames:
+            mel = torch.nn.functional.pad(mel, (0, min_frames - mel.shape[-1]))
+
         # Shape for CTranslate2: (batch=1, n_mels, n_frames)
         features = np.expand_dims(mel.numpy(), axis=0).astype(np.float32)
 
