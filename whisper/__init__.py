@@ -8,10 +8,12 @@ from typing import List, Optional, Union
 import torch
 from tqdm import tqdm
 
-from .audio import load_audio, log_mel_spectrogram, pad_or_trim
+from .audio import load_audio, log_mel_spectrogram, log_mel_spectrogram_chunk, pad_or_trim
 from .decoding import DecodingOptions, DecodingResult, decode, detect_language
 from .model import ModelDimensions, Whisper
+from .streaming import StreamingTranscriber, TranscriptionResult
 from .transcribe import transcribe
+from .vad import VoiceActivityDetector
 from .version import __version__
 
 _MODELS = {

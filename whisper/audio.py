@@ -155,3 +155,51 @@ def log_mel_spectrogram(
     log_spec = torch.maximum(log_spec, log_spec.max() - 8.0)
     log_spec = (log_spec + 4.0) / 4.0
     return log_spec
+
+
+def log_mel_spectrogram_chunk(
+    audio: Union[np.ndarray, torch.Tensor],
+    n_mels: int = 80,
+    device: Optional[Union[str, torch.device]] = None,
+) -> torch.Tensor:
+    """Compute log-Mel spectrogram for a short audio chunk without padding.
+
+    Unlike ``log_mel_spectrogram``, this function does NOT pad or trim the
+    audio to 30 seconds. It produces a mel spectrogram whose temporal length
+    is proportional to the actual audio duration, suitable for streaming
+    transcription of chunks in the 1-5 second range.
+
+    Parameters
+    ----------
+    audio : Union[np.ndarray, torch.Tensor]
+        Audio waveform at 16 kHz, shape ``(n_samples,)``.
+    n_mels : int
+        Number of mel filters (80 or 128).
+    device : Optional[Union[str, torch.device]]
+        Target device for the output tensor.
+
+    Returns
+    -------
+    torch.Tensor, shape = (n_mels, n_frames)
+        Log-Mel spectrogram with ``n_frames`` proportional to the input
+        duration (approximately ``n_samples / HOP_LENGTH``).
+    """
+    if not torch.is_tensor(audio):
+        audio = torch.from_numpy(audio)
+
+    audio = audio.float()
+
+    if device is not None:
+        audio = audio.to(device)
+
+    window = torch.hann_window(N_FFT).to(audio.device)
+    stft = torch.stft(audio, N_FFT, HOP_LENGTH, window=window, return_complex=True)
+    magnitudes = stft[..., :-1].abs() ** 2
+
+    filters = mel_filters(audio.device, n_mels)
+    mel_spec = filters @ magnitudes
+
+    log_spec = torch.clamp(mel_spec, min=1e-10).log10()
+    log_spec = torch.maximum(log_spec, log_spec.max() - 8.0)
+    log_spec = (log_spec + 4.0) / 4.0
+    return log_spec
