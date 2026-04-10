@@ -55,6 +55,12 @@ class VoiceActivityDetector:
         self.sample_rate = sample_rate
         self.frame_size = int(self.FRAME_SIZE_MS * sample_rate / 1000)
 
+        # Pre-speech tolerance: allow brief silence gaps while accumulating
+        # enough speech frames to trigger _is_speaking. Without this,
+        # natural micro-pauses between words reset the accumulator and
+        # speech is never detected.
+        self._pre_speech_silence_limit = int(100 * sample_rate / 1000)  # 100ms
+
         self._model = None
         self._speech_buffer: List[np.ndarray] = []
         self._silence_counter = 0
@@ -131,8 +137,9 @@ class VoiceActivityDetector:
 
             else:
                 # Silence detected
+                self._silence_counter += len(frame)
+
                 if self._is_speaking:
-                    self._silence_counter += len(frame)
                     self._speech_buffer.append(audio_chunk[i : i + self.frame_size])
 
                     if self._silence_counter >= self.min_silence_samples:
@@ -143,10 +150,16 @@ class VoiceActivityDetector:
                         self._speech_counter = 0
                         self._silence_counter = 0
                         self._is_speaking = False
-                else:
-                    # Not speaking, reset counters
-                    self._speech_counter = 0
-                    self._speech_buffer = []
+
+                elif self._speech_counter > 0:
+                    # Pre-speech phase: tolerate brief silence gaps
+                    self._speech_buffer.append(audio_chunk[i : i + self.frame_size])
+
+                    if self._silence_counter >= self._pre_speech_silence_limit:
+                        # Too much silence, discard pre-speech accumulation
+                        self._speech_counter = 0
+                        self._silence_counter = 0
+                        self._speech_buffer = []
 
         self._global_offset += len(audio_chunk)
         return completed_segments
