@@ -23,13 +23,14 @@ Typical usage for telephony::
     final = transcriber.flush()
 """
 
+import os
 import time
 from dataclasses import dataclass
 from typing import List, Optional
 
 import numpy as np
 
-from .audio import SAMPLE_RATE
+from .audio import SAMPLE_RATE, log_mel_spectrogram_chunk
 from .vad import VoiceActivityDetector
 
 
@@ -139,7 +140,8 @@ class StreamingTranscriber:
         self.beam_size = beam_size
         self.initial_prompt = initial_prompt
 
-        self._model = None
+        self._ct2_model = None  # ctranslate2.models.Whisper
+        self._tokenizer = None  # faster_whisper tokenizer
         self._vad = VoiceActivityDetector(
             threshold=vad_threshold,
             min_speech_ms=min_speech_ms,
@@ -148,89 +150,143 @@ class StreamingTranscriber:
             sample_rate=SAMPLE_RATE,
         )
 
+        # Number of mel filters — 128 for large-v3/turbo, 80 for others
+        self._n_mels = 128 if model_size in {
+            "large-v3", "large", "large-v3-turbo", "turbo",
+        } else 80
+
         # Context tracking for cross-segment coherence
-        self._previous_text: str = ""
+        self._previous_tokens: List[int] = []
         self._segment_count: int = 0
         self._total_audio_ms: float = 0.0
         self._total_latency_ms: float = 0.0
 
     def _load_model(self):
-        """Lazy-load the CTranslate2 Whisper model on first use."""
-        if self._model is not None:
+        """Lazy-load the CTranslate2 Whisper model on first use.
+
+        Uses faster-whisper only for model download and conversion to
+        CTranslate2 format. All inference goes through the CTranslate2
+        API directly, bypassing faster-whisper's 30s padding.
+        """
+        if self._ct2_model is not None:
             return
 
         try:
-            from faster_whisper import WhisperModel
+            import ctranslate2
+            from faster_whisper.utils import download_model
+            from faster_whisper.tokenizer import Tokenizer
         except ImportError:
             raise ImportError(
-                "faster-whisper is required for streaming transcription. "
-                "Install it with: pip install faster-whisper"
+                "faster-whisper and ctranslate2 are required for streaming. "
+                "Install with: pip install faster-whisper"
             )
 
-        self._model = WhisperModel(
-            self.model_size,
+        # Download/convert model via faster-whisper, get the CTranslate2 path
+        model_path = download_model(self.model_size)
+
+        # Load CTranslate2 model directly — this is the C++ engine
+        self._ct2_model = ctranslate2.models.Whisper(
+            model_path,
             device=self.device,
             compute_type=self.compute_type,
         )
 
-    def _build_prompt(self) -> Optional[str]:
-        """Build decoder prompt from initial prompt and previous context."""
-        parts = []
+        # Build tokenizer for prompt encoding and text decoding
+        from tokenizers import Tokenizer as HFTokenizer
 
+        tokenizer_path = os.path.join(model_path, "tokenizer.json")
+        hf_tokenizer = HFTokenizer.from_file(tokenizer_path)
+        self._tokenizer = Tokenizer(
+            hf_tokenizer,
+            self._ct2_model.is_multilingual,
+            task="transcribe",
+            language=self.language,
+        )
+
+    def _build_prompt_tokens(self) -> List[int]:
+        """Build the decoder prompt token sequence.
+
+        Returns the SOT (start-of-transcript) sequence with language,
+        task, and optional context from previous segments.
+        """
+        # SOT sequence: <|startoftranscript|> [<|lang|>] <|transcribe|> <|notimestamps|>
+        tokens = list(self._tokenizer.sot_sequence)
+        tokens.append(self._tokenizer.no_timestamps)
+
+        # Prepend previous context for cross-segment coherence
+        if self._previous_tokens:
+            prev = self._previous_tokens[-200:]  # limit context length
+            tokens = [self._tokenizer.sot_prev] + prev + tokens
+
+        # Prepend initial prompt if set
         if self.initial_prompt:
-            parts.append(self.initial_prompt)
+            prompt_tokens = self._tokenizer.encode(" " + self.initial_prompt.strip())
+            tokens = [self._tokenizer.sot_prev] + prompt_tokens + tokens
 
-        if self._previous_text:
-            # Carry last segment's text as context for coherence
-            # Truncate to avoid exceeding decoder context window
-            prev = self._previous_text[-200:]
-            parts.append(prev)
-
-        return " ".join(parts) if parts else None
+        return tokens
 
     def _transcribe_segment(self, audio: np.ndarray) -> TranscriptionResult:
-        """Transcribe a single speech segment using CTranslate2.
+        """Transcribe a speech segment via CTranslate2 directly.
 
-        Parameters
-        ----------
-        audio : np.ndarray
-            Speech audio segment as float32 at 16kHz.
-
-        Returns
-        -------
-        TranscriptionResult
-            Transcription with timing metadata.
+        Computes a mel spectrogram proportional to the actual audio
+        duration (no 30s padding) and passes it straight to the
+        CTranslate2 C++ encoder and decoder. This is the key
+        optimization: a 2s segment produces ~200 mel frames instead
+        of the 3000 frames that faster-whisper would pad to.
         """
         self._load_model()
 
         t_start = time.perf_counter()
         duration_ms = len(audio) / SAMPLE_RATE * 1000
 
-        prompt = self._build_prompt()
+        # Compute mel spectrogram — proportional to actual duration, no padding
+        mel = log_mel_spectrogram_chunk(audio, n_mels=self._n_mels)
 
-        segments, info = self._model.transcribe(
-            audio,
-            language=self.language,
+        # Shape for CTranslate2: (batch=1, n_mels, n_frames)
+        features = np.expand_dims(mel.numpy(), axis=0).astype(np.float32)
+
+        # Encode audio — C++ kernel, processes only the real frames
+        import ctranslate2
+
+        features_sv = ctranslate2.StorageView.from_array(features)
+
+        # Detect language if not configured
+        detected_language = self.language
+        if detected_language is None:
+            lang_results = self._ct2_model.detect_language(features_sv)
+            detected_language = lang_results[0][0][0]  # top language
+            # Update tokenizer with detected language
+            self._tokenizer.language_code = detected_language
+
+        # Build prompt and generate
+        prompt_tokens = self._build_prompt_tokens()
+
+        results = self._ct2_model.generate(
+            features_sv,
+            [prompt_tokens],
             beam_size=self.beam_size,
-            initial_prompt=prompt,
-            vad_filter=False,  # We handle VAD ourselves
-            without_timestamps=True,  # Skip timestamps for speed
-            condition_on_previous_text=False,  # We manage context ourselves
+            max_length=448,
+            suppress_blank=True,
+            suppress_tokens=[-1],
+            return_no_speech_prob=True,
         )
 
-        # Consume the generator to get all text
-        text_parts = []
-        for segment in segments:
-            text_parts.append(segment.text.strip())
+        # Decode tokens to text
+        result = results[0]
+        output_tokens = result.sequences_ids[0]
 
-        text = " ".join(text_parts)
-        detected_language = info.language if self.language is None else self.language
+        # Filter out special tokens and decode
+        text_tokens = [
+            t for t in output_tokens
+            if t < self._tokenizer.eot
+        ]
+        text = self._tokenizer.decode(text_tokens).strip()
 
         latency_ms = (time.perf_counter() - t_start) * 1000
 
-        # Update context
-        if text:
-            self._previous_text = text
+        # Update context for next segment
+        if text_tokens:
+            self._previous_tokens = text_tokens
         self._segment_count += 1
         self._total_audio_ms += duration_ms
         self._total_latency_ms += latency_ms
@@ -301,7 +357,7 @@ class StreamingTranscriber:
         loaded — only conversation state is reset.
         """
         self._vad.reset()
-        self._previous_text = ""
+        self._previous_tokens = []
         self._segment_count = 0
         self._total_audio_ms = 0.0
         self._total_latency_ms = 0.0

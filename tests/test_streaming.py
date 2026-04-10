@@ -182,12 +182,12 @@ class TestStreamingTranscriber:
         from whisper.streaming import StreamingTranscriber
 
         t = StreamingTranscriber(model_size="large-v3", device="cpu")
-        t._previous_text = "some previous text"
+        t._previous_tokens = [1, 2, 3]
         t._segment_count = 5
         t._total_audio_ms = 10000.0
 
         t.reset()
-        assert t._previous_text == ""
+        assert t._previous_tokens == []
         assert t._segment_count == 0
         assert t._total_audio_ms == 0.0
 
@@ -213,7 +213,7 @@ class TestStreamingTranscriber:
             )
             assert t.language == lang
 
-    def test_build_prompt_with_initial(self):
+    def test_initial_prompt_stored(self):
         from whisper.streaming import StreamingTranscriber
 
         t = StreamingTranscriber(
@@ -221,23 +221,27 @@ class TestStreamingTranscriber:
             device="cpu",
             initial_prompt="telephony customer service",
         )
-        prompt = t._build_prompt()
-        assert "telephony customer service" in prompt
+        assert t.initial_prompt == "telephony customer service"
 
-    def test_build_prompt_with_context(self):
+    def test_previous_tokens_empty_at_init(self):
         from whisper.streaming import StreamingTranscriber
 
         t = StreamingTranscriber(model_size="large-v3", device="cpu")
-        t._previous_text = "Buongiorno, come posso aiutarla?"
-        prompt = t._build_prompt()
-        assert "Buongiorno" in prompt
+        assert t._previous_tokens == []
 
-    def test_build_prompt_empty(self):
+    def test_n_mels_large_v3(self):
+        """Large-v3 uses 128 mel filters."""
         from whisper.streaming import StreamingTranscriber
 
         t = StreamingTranscriber(model_size="large-v3", device="cpu")
-        prompt = t._build_prompt()
-        assert prompt is None
+        assert t._n_mels == 128
+
+    def test_n_mels_small(self):
+        """Smaller models use 80 mel filters."""
+        from whisper.streaming import StreamingTranscriber
+
+        t = StreamingTranscriber(model_size="small", device="cpu")
+        assert t._n_mels == 80
 
 
 # ---------------------------------------------------------------------------
