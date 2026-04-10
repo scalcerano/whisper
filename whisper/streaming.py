@@ -203,6 +203,18 @@ class StreamingTranscriber:
             language=self.language,
         )
 
+        # Warm up CUDA kernels with a dummy inference so the first real
+        # segment doesn't pay the JIT compilation cost.
+        dummy_mel = np.zeros((1, self._n_mels, 300), dtype=np.float32)
+        dummy_features = ctranslate2.StorageView.from_array(dummy_mel)
+        prompt = list(self._tokenizer.sot_sequence)
+        prompt.append(self._tokenizer.no_timestamps)
+        self._ct2_model.generate(
+            dummy_features, [prompt],
+            beam_size=self.beam_size,
+            max_length=1,
+        )
+
     def _build_prompt_tokens(self) -> List[int]:
         """Build the decoder prompt token sequence.
 
