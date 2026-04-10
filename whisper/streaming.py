@@ -261,11 +261,19 @@ class StreamingTranscriber:
         # Build prompt and generate
         prompt_tokens = self._build_prompt_tokens()
 
+        # Limit max_length proportionally to audio duration to prevent
+        # the decoder from generating far more text than the audio contains.
+        # Whisper produces ~25 tokens/second of speech.
+        duration_s = len(audio) / SAMPLE_RATE
+        max_tokens = max(int(duration_s * 30), 10)  # 30 tok/s with margin
+
         results = self._ct2_model.generate(
             features_sv,
             [prompt_tokens],
             beam_size=self.beam_size,
-            max_length=448,
+            max_length=max_tokens,
+            repetition_penalty=1.2,
+            no_repeat_ngram_size=3,
             suppress_blank=True,
             suppress_tokens=[-1],
             return_no_speech_prob=True,
