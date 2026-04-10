@@ -1,11 +1,14 @@
-# Whisper
+# Whisper — Streaming Fork
 
-[[Blog]](https://openai.com/blog/whisper)
+> Fork of [openai/whisper](https://github.com/openai/whisper) with **real-time streaming transcription** for telephony systems.
+
+[[Original Blog]](https://openai.com/blog/whisper)
 [[Paper]](https://arxiv.org/abs/2212.04356)
 [[Model card]](https://github.com/openai/whisper/blob/main/model-card.md)
-[[Colab example]](https://colab.research.google.com/github/openai/whisper/blob/master/notebooks/LibriSpeech.ipynb)
 
-Whisper is a general-purpose speech recognition model. It is trained on a large dataset of diverse audio and is also a multitasking model that can perform multilingual speech recognition, speech translation, and language identification.
+Whisper is a general-purpose speech recognition model. It is trained on a large dataset of diverse audio and is also a multitask model that can perform multilingual speech recognition, speech translation, and language identification.
+
+**This fork adds a streaming STT module** targeting sub-200ms latency per segment, designed for real-time telephony in Italian, English, German, French, Spanish, and Portuguese.
 
 
 ## Approach
@@ -150,9 +153,100 @@ result = whisper.decode(model, mel, options)
 print(result.text)
 ```
 
+## Streaming transcription
+
+This fork adds a streaming module optimized for telephony. It combines **Silero VAD** for speech boundary detection with **CTranslate2** (via `faster-whisper`) for low-latency inference.
+
+### Installation
+
+```bash
+pip install git+https://github.com/scalcerano/whisper.git
+pip install faster-whisper
+```
+
+Or install with the streaming extra:
+
+```bash
+pip install "openai-whisper[streaming] @ git+https://github.com/scalcerano/whisper.git"
+```
+
+### Quick start
+
+```python
+from whisper import StreamingTranscriber
+
+transcriber = StreamingTranscriber(
+    model_size="large-v3",
+    device="cuda",
+    compute_type="int8",
+    language="it",
+)
+
+# Feed audio as it arrives (e.g. from a telephony channel)
+for pcm_chunk in audio_stream:
+    results = transcriber.feed(pcm_chunk)
+    for r in results:
+        print(f"[{r.latency_ms:.0f}ms] {r.text}")
+
+# Flush remaining audio at end of call
+for r in transcriber.flush():
+    print(f"[final] {r.text}")
+
+# Reset for next call (model stays loaded)
+transcriber.reset()
+```
+
+### Architecture
+
+```
+Audio 16kHz PCM
+  -> VoiceActivityDetector (Silero VAD, ~5ms)
+  -> Speech segments (1-5s, bounded by natural pauses)
+  -> CTranslate2 Whisper Large v3 INT8 (~140ms on GPU)
+  -> TranscriptionResult (text + latency + language)
+```
+
+| Component | Latency |
+|-----------|---------|
+| Silero VAD | ~5ms |
+| Mel spectrogram | ~10ms |
+| CTranslate2 encoder (INT8) | ~60ms |
+| CTranslate2 decoder | ~50ms |
+| Overhead | ~25ms |
+| **Total** | **~150ms** |
+
+### Key features
+
+- **VAD-guided chunking** — segments follow natural speech boundaries, not fixed windows
+- **CTranslate2 backend** — INT8 quantized inference, 4-6x faster than PyTorch
+- **Cross-segment context** — previous text carried as decoder prompt for coherence
+- **Lazy loading** — model loaded on first `feed()` call, not at init
+- **Per-call stats** — latency tracking via `transcriber.stats`
+
+### Supported languages
+
+Italian, English, German, French, Spanish, Portuguese (and all other Whisper-supported languages).
+
+### Configuration
+
+```python
+StreamingTranscriber(
+    model_size="large-v3",      # any Whisper model
+    device="cuda",              # "cuda" or "cpu"
+    compute_type="int8",        # int8, float16, int8_float16, float32
+    language="it",              # None for auto-detection
+    beam_size=5,                # beam search width
+    vad_threshold=0.5,          # speech detection sensitivity
+    min_speech_ms=250,          # minimum speech to trigger transcription
+    min_silence_ms=300,         # silence duration to end a segment
+    max_speech_ms=5000,         # max segment length before forced split
+    initial_prompt="customer service",  # domain vocabulary hint
+)
+```
+
 ## More examples
 
-Please use the [🙌 Show and tell](https://github.com/openai/whisper/discussions/categories/show-and-tell) category in Discussions for sharing more example usages of Whisper and third-party extensions such as web demos, integrations with other tools, ports for different platforms, etc.
+Please use the [Show and tell](https://github.com/openai/whisper/discussions/categories/show-and-tell) category in Discussions for sharing more example usages of Whisper and third-party extensions such as web demos, integrations with other tools, ports for different platforms, etc.
 
 
 ## License
