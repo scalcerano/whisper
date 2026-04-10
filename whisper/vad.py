@@ -32,7 +32,7 @@ class VoiceActivityDetector:
     """
 
     SUPPORTED_SAMPLE_RATES = {8000, 16000}
-    FRAME_SIZE_MS = 30  # Silero VAD operates on 30ms frames at 16kHz
+    FRAME_SIZE_MS = 32  # Silero VAD requires >= 512 samples at 16kHz (sr/31.25)
 
     def __init__(
         self,
