@@ -223,6 +223,36 @@ class TestStreamingTranscriber:
         )
         assert t.initial_prompt == "telephony customer service"
 
+    def test_telephony_hints_prompt(self):
+        """telephony_hints=True should prepend telephony vocabulary."""
+        from whisper.streaming import StreamingTranscriber
+
+        t = StreamingTranscriber(
+            model_size="large-v3",
+            device="cpu",
+            telephony_hints=True,
+        )
+        assert "chiocciola" in t.initial_prompt
+        assert "@" in t.initial_prompt
+
+    def test_telephony_hints_combined_with_user_prompt(self):
+        from whisper.streaming import StreamingTranscriber
+
+        t = StreamingTranscriber(
+            model_size="large-v3",
+            device="cpu",
+            telephony_hints=True,
+            initial_prompt="immobiliare",
+        )
+        assert "chiocciola" in t.initial_prompt
+        assert "immobiliare" in t.initial_prompt
+
+    def test_no_telephony_hints_default(self):
+        from whisper.streaming import StreamingTranscriber
+
+        t = StreamingTranscriber(model_size="large-v3", device="cpu")
+        assert t.initial_prompt is None
+
     def test_previous_tokens_empty_at_init(self):
         from whisper.streaming import StreamingTranscriber
 

@@ -107,7 +107,26 @@ class StreamingTranscriber:
         Maximum speech duration before forcing segment boundary.
     initial_prompt : str, optional
         Initial prompt to condition the decoder for domain-specific vocabulary.
+        When ``telephony_hints`` is True, a telephony-specific prompt is
+        prepended automatically.
+    telephony_hints : bool
+        When True, prepend a prompt with telephony vocabulary (email
+        spelling, addresses, phone numbers) to improve recognition of
+        dictated contact information.
     """
+
+    # Default prompt that helps Whisper recognize spelled-out emails,
+    # addresses, and phone numbers in a telephony context.
+    _TELEPHONY_PROMPT = (
+        "Trascrizione chiamata telefonica. "
+        "L'utente potrebbe dettare indirizzi email lettera per lettera come: "
+        "s-c-a-l-c-e-r-a-n-o chiocciola gmail punto com, "
+        "oppure indirizzi, numeri di telefono, codici fiscali. "
+        "Email dictation: name at domain dot com. "
+        "Spelling: a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, "
+        "q, r, s, t, u, v, w, x, y, z. "
+        "Simboli: chiocciola @, punto ., trattino -, underscore _."
+    )
 
     def __init__(
         self,
@@ -117,10 +136,11 @@ class StreamingTranscriber:
         language: Optional[str] = None,
         beam_size: int = 5,
         vad_threshold: float = 0.5,
-        min_speech_ms: int = 250,
-        min_silence_ms: int = 300,
-        max_speech_ms: int = 5000,
+        min_speech_ms: int = 400,
+        min_silence_ms: int = 600,
+        max_speech_ms: int = 8000,
         initial_prompt: Optional[str] = None,
+        telephony_hints: bool = False,
     ):
         if model_size not in _CT2_MODEL_SIZES:
             raise ValueError(
@@ -138,7 +158,14 @@ class StreamingTranscriber:
         self.compute_type = compute_type
         self.language = language
         self.beam_size = beam_size
-        self.initial_prompt = initial_prompt
+
+        # Build effective prompt: telephony hints + user prompt
+        prompt_parts = []
+        if telephony_hints:
+            prompt_parts.append(self._TELEPHONY_PROMPT)
+        if initial_prompt:
+            prompt_parts.append(initial_prompt)
+        self.initial_prompt = " ".join(prompt_parts) if prompt_parts else None
 
         self._ct2_model = None  # ctranslate2.models.Whisper
         self._tokenizer = None  # faster_whisper tokenizer
@@ -300,8 +327,22 @@ class StreamingTranscriber:
             return_no_speech_prob=True,
         )
 
-        # Decode tokens to text
+        # Decode tokens to text — guard against empty results from
+        # CTranslate2 on very short or silent audio segments.
         result = results[0]
+        if not result.sequences_ids or not result.sequences_ids[0]:
+            latency_ms = (time.perf_counter() - t_start) * 1000
+            self._segment_count += 1
+            self._total_audio_ms += duration_ms
+            self._total_latency_ms += latency_ms
+            return TranscriptionResult(
+                text="",
+                language=detected_language,
+                duration_ms=duration_ms,
+                latency_ms=latency_ms,
+                is_final=True,
+            )
+
         output_tokens = result.sequences_ids[0]
 
         # Filter out special tokens and decode
