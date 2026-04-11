@@ -326,20 +326,29 @@ class StreamingTranscriber:
         duration_s = len(audio) / SAMPLE_RATE
         max_tokens = max(int(duration_s * 40), 20)  # 40 tok/s with margin
 
+        t_mel = time.perf_counter()
+        logger.info(f"[STT-DBG] mel shape={features.shape}, prompt_len={len(prompt_tokens)}, max_tokens={max_tokens}, duration={duration_s:.1f}s")
+
         results = self._ct2_model.generate(
             features_sv,
             [prompt_tokens],
             beam_size=self.beam_size,
             max_length=max_tokens,
             repetition_penalty=1.1,
-            suppress_blank=True,
+            suppress_blank=False,
             suppress_tokens=[-1],
             return_no_speech_prob=True,
         )
 
+        t_gen = time.perf_counter()
+
         # Decode tokens to text — guard against empty results from
         # CTranslate2 on very short or silent audio segments.
         result = results[0]
+        no_speech_prob = result.no_speech_prob if hasattr(result, 'no_speech_prob') else -1
+        n_tokens = len(result.sequences_ids[0]) if result.sequences_ids and result.sequences_ids[0] else 0
+        logger.info(f"[STT-DBG] generate: {(t_gen-t_mel)*1000:.0f}ms, tokens={n_tokens}, no_speech_prob={no_speech_prob:.3f}")
+
         if not result.sequences_ids or not result.sequences_ids[0]:
             latency_ms = (time.perf_counter() - t_start) * 1000
             self._segment_count += 1
