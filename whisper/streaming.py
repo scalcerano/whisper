@@ -332,7 +332,7 @@ class StreamingTranscriber:
             beam_size=self.beam_size,
             max_length=max_tokens,
             repetition_penalty=1.1,
-            suppress_blank=False,
+            suppress_blank=True,
             suppress_tokens=[-1],
             return_no_speech_prob=True,
         )
