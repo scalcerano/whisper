@@ -118,17 +118,11 @@ class StreamingTranscriber:
         dictated contact information.
     """
 
-    # Default prompt that helps Whisper recognize spelled-out emails,
-    # addresses, and phone numbers in a telephony context.
+    # Short domain vocabulary prompt — anchors the decoder without bloating
+    # the token budget. Whisper doesn't need verbose instructions, just
+    # key terms it might encounter in a telephony context.
     _TELEPHONY_PROMPT = (
-        "Trascrizione chiamata telefonica. "
-        "L'utente potrebbe dettare indirizzi email lettera per lettera come: "
-        "s-c-a-l-c-e-r-a-n-o chiocciola gmail punto com, "
-        "oppure indirizzi, numeri di telefono, codici fiscali. "
-        "Email dictation: name at domain dot com. "
-        "Spelling: a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, "
-        "q, r, s, t, u, v, w, x, y, z. "
-        "Simboli: chiocciola @, punto ., trattino -, underscore _."
+        "Telefonata. Email, telefono, indirizzo, codice fiscale."
     )
 
     def __init__(
@@ -253,9 +247,9 @@ class StreamingTranscriber:
 
         Token budget: Whisper decoder has 448 max tokens total.
         We must leave room for the actual transcription output.
-        Budget: prompt ≤ 224 tokens (half for prompt, half for output).
+        Budget: prompt ≤ 80 tokens (~18% of decoder capacity).
         """
-        MAX_PROMPT_TOKENS = 224  # leave 224 tokens for generated text
+        MAX_PROMPT_TOKENS = 80  # leave 368 tokens for generated text
 
         # SOT sequence: <|startoftranscript|> [<|lang|>] <|transcribe|> <|notimestamps|>
         sot = list(self._tokenizer.sot_sequence)
