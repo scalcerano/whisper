@@ -237,10 +237,11 @@ StreamingTranscriber(
     language="it",              # None for auto-detection
     beam_size=5,                # beam search width
     vad_threshold=0.5,          # speech detection sensitivity
-    min_speech_ms=250,          # minimum speech to trigger transcription
-    min_silence_ms=300,         # silence duration to end a segment
-    max_speech_ms=5000,         # max segment length before forced split
-    initial_prompt="customer service",  # domain vocabulary hint
+    min_speech_ms=400,          # minimum speech to trigger transcription
+    min_silence_ms=600,         # silence duration to end a segment
+    max_speech_ms=8000,         # max segment length before forced split
+    initial_prompt="immobiliare",  # domain vocabulary hint
+    telephony_hints=True,       # spelling/email/address recognition
 )
 ```
 

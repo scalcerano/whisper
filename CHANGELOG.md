@@ -1,5 +1,28 @@
 # CHANGELOG
 
+## [streaming-v1] — 2026-04-11 (scalcerano fork)
+
+### Added
+* **Streaming STT module** (`whisper/streaming.py`) — real-time transcription via CTranslate2 with VAD-guided chunking, targeting sub-200ms latency on GPU
+* **Voice Activity Detection** (`whisper/vad.py`) — Silero VAD wrapper with telephony-optimized defaults (min_silence_ms=600, min_speech_ms=400)
+* **Variable-length mel spectrogram** (`whisper/audio.py`) — `log_mel_spectrogram_chunk()` without 30s padding
+* **Telephony hints** — `telephony_hints=True` parameter for email/address/phone spelling recognition
+* **CUDA warmup** — dummy inference at model load to eliminate first-segment cold start
+* Optional dependency: `faster-whisper>=1.1.0` via `pip install openai-whisper[streaming]`
+* Test suite: `tests/test_streaming.py` (25 tests), `tests/test_e2e_streaming.py`, `tests/benchmark_latency.py`
+* Docker support with GPU passthrough (`Dockerfile`)
+
+### Fixed
+* IndexError crash on empty CTranslate2 `sequences_ids` for very short audio segments
+* VAD pre-speech silence tolerance — natural micro-pauses no longer reset speech accumulation
+* VAD frame size increased to 512 samples (32ms) to meet Silero minimum input requirement
+* Decoder repetition on short mel input via `repetition_penalty=1.1` and proportional `max_length`
+
+### Performance
+* Latency: 73-250ms per segment on NVIDIA L4 (Large v3, INT8, beam=5)
+* RTF: 0.05-0.08 (processes 1s of audio in 50-80ms)
+* Direct CTranslate2 C++ API — bypasses faster-whisper's 30s mel padding
+
 ## [v20250625](https://github.com/openai/whisper/releases/tag/v20250625)
 
 * Fix: Update torch.load to use weights_only=True to prevent security w… ([#2451](https://github.com/openai/whisper/pull/2451))
