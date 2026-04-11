@@ -23,12 +23,15 @@ Typical usage for telephony::
     final = transcriber.flush()
 """
 
+import logging
 import os
 import time
 from dataclasses import dataclass
 from typing import List, Optional
 
 import numpy as np
+
+logger = logging.getLogger("whisper.streaming")
 
 from .audio import SAMPLE_RATE, log_mel_spectrogram_chunk
 from .vad import VoiceActivityDetector
