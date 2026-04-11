@@ -247,22 +247,32 @@ class StreamingTranscriber:
 
         Returns the SOT (start-of-transcript) sequence with language,
         task, and optional context from previous segments.
+
+        Token budget: Whisper decoder has 448 max tokens total.
+        We must leave room for the actual transcription output.
+        Budget: prompt ≤ 224 tokens (half for prompt, half for output).
         """
+        MAX_PROMPT_TOKENS = 224  # leave 224 tokens for generated text
+
         # SOT sequence: <|startoftranscript|> [<|lang|>] <|transcribe|> <|notimestamps|>
-        tokens = list(self._tokenizer.sot_sequence)
-        tokens.append(self._tokenizer.no_timestamps)
+        sot = list(self._tokenizer.sot_sequence)
+        sot.append(self._tokenizer.no_timestamps)
 
-        # Prepend previous context for cross-segment coherence
-        if self._previous_tokens:
-            prev = self._previous_tokens[-200:]  # limit context length
-            tokens = [self._tokenizer.sot_prev] + prev + tokens
-
-        # Prepend initial prompt if set
-        if self.initial_prompt:
+        # Build prefix: initial_prompt OR previous_tokens (not both — avoids bloat)
+        prefix = []
+        if self.initial_prompt and not self._previous_tokens:
+            # First segment: use initial prompt for domain conditioning
             prompt_tokens = self._tokenizer.encode(" " + self.initial_prompt.strip())
-            tokens = [self._tokenizer.sot_prev] + prompt_tokens + tokens
+            budget = MAX_PROMPT_TOKENS - len(sot)
+            prefix = [self._tokenizer.sot_prev] + prompt_tokens[:budget]
+        elif self._previous_tokens:
+            # Subsequent segments: use previous context for coherence
+            # (more useful than repeating the static prompt)
+            budget = MAX_PROMPT_TOKENS - len(sot)
+            prev = self._previous_tokens[-(budget - 1):]  # -1 for sot_prev token
+            prefix = [self._tokenizer.sot_prev] + prev
 
-        return tokens
+        return prefix + sot
 
     def _transcribe_segment(self, audio: np.ndarray) -> TranscriptionResult:
         """Transcribe a speech segment via CTranslate2 directly.
