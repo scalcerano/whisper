@@ -329,8 +329,10 @@ class StreamingTranscriber:
         # Limit max_length proportionally to audio duration to prevent
         # the decoder from generating far more text than the audio contains.
         # Whisper produces ~25 tokens/second of speech.
+        # Guard: CTranslate2 requires max_length > 0 after internal prompt
+        # accounting — ensure a safe minimum that exceeds any prompt size.
         duration_s = len(audio) / SAMPLE_RATE
-        max_tokens = max(int(duration_s * 40), 20)  # 40 tok/s with margin
+        max_tokens = max(int(duration_s * 40), len(prompt_tokens) + 10)
 
         t_mel = time.perf_counter()
         logger.info(f"[STT-DBG] mel shape={features.shape}, prompt_len={len(prompt_tokens)}, max_tokens={max_tokens}, duration={duration_s:.1f}s")
