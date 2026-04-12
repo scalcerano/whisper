@@ -20,41 +20,21 @@ A Transformer sequence-to-sequence model is trained on various speech processing
 
 ## Setup
 
-We used Python 3.9.9 and [PyTorch](https://pytorch.org/) 1.10.1 to train and test our models, but the codebase is expected to be compatible with Python 3.8-3.11 and recent PyTorch versions. The codebase also depends on a few Python packages, most notably [OpenAI's tiktoken](https://github.com/openai/tiktoken) for their fast tokenizer implementation. You can download and install (or update to) the latest release of Whisper with the following command:
-
-    pip install -U openai-whisper
-
-Alternatively, the following command will pull and install the latest commit from this repository, along with its Python dependencies:
-
-    pip install git+https://github.com/openai/whisper.git 
-
-To update the package to the latest version of this repository, please run:
-
-    pip install --upgrade --no-deps --force-reinstall git+https://github.com/openai/whisper.git
-
-It also requires the command-line tool [`ffmpeg`](https://ffmpeg.org/) to be installed on your system, which is available from most package managers:
+Python 3.9+ and [PyTorch](https://pytorch.org/) with CUDA are required. Install from this repository:
 
 ```bash
-# on Ubuntu or Debian
-sudo apt update && sudo apt install ffmpeg
-
-# on Arch Linux
-sudo pacman -S ffmpeg
-
-# on MacOS using Homebrew (https://brew.sh/)
-brew install ffmpeg
-
-# on Windows using Chocolatey (https://chocolatey.org/)
-choco install ffmpeg
-
-# on Windows using Scoop (https://scoop.sh/)
-scoop install ffmpeg
+pip install git+https://github.com/scalcerano/whisper-ng.git
+pip install faster-whisper torchaudio
 ```
 
-You may need [`rust`](http://rust-lang.org) installed as well, in case [tiktoken](https://github.com/openai/tiktoken) does not provide a pre-built wheel for your platform. If you see installation errors during the `pip install` command above, please follow the [Getting started page](https://www.rust-lang.org/learn/get-started) to install Rust development environment. Additionally, you may need to configure the `PATH` environment variable, e.g. `export PATH="$HOME/.cargo/bin:$PATH"`. If the installation fails with `No module named 'setuptools_rust'`, you need to install `setuptools_rust`, e.g. by running:
+It also requires [`ffmpeg`](https://ffmpeg.org/):
 
 ```bash
-pip install setuptools-rust
+# Ubuntu/Debian
+sudo apt update && sudo apt install ffmpeg
+
+# macOS
+brew install ffmpeg
 ```
 
 
@@ -82,35 +62,13 @@ Whisper's performance varies widely depending on the language. The figure below 
 
 ## Command-line usage
 
-The following command will transcribe speech in audio files, using the `turbo` model:
+Whisper-NG includes a CLI for batch transcription:
 
 ```bash
-whisper audio.flac audio.mp3 audio.wav --model turbo
+whisper-ng audio.flac audio.mp3 audio.wav --model turbo
+whisper-ng call.wav --language Italian --model large-v3-turbo
+whisper-ng --help
 ```
-
-The default setting (which selects the `turbo` model) works well for transcribing English. However, **the `turbo` model is not trained for translation tasks**. If you need to **translate non-English speech into English**, use one of the **multilingual models** (`tiny`, `base`, `small`, `medium`, `large`) instead of `turbo`. 
-
-For example, to transcribe an audio file containing non-English speech, you can specify the language:
-
-```bash
-whisper japanese.wav --language Japanese
-```
-
-To **translate** speech into English, use:
-
-```bash
-whisper japanese.wav --model medium --language Japanese --task translate
-```
-
-> **Note:** The `turbo` model will return the original language even if `--task translate` is specified. Use `medium` or `large` for the best translation results.
-
-Run the following to view all available options:
-
-```bash
-whisper --help
-```
-
-See [tokenizer.py](https://github.com/openai/whisper/blob/main/whisper/tokenizer.py) for the list of all available languages.
 
 
 ## Python usage
