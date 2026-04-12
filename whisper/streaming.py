@@ -33,7 +33,7 @@ import numpy as np
 
 logger = logging.getLogger("whisper.streaming")
 
-from .audio import SAMPLE_RATE, log_mel_spectrogram_chunk
+from .audio import N_FRAMES, N_SAMPLES, SAMPLE_RATE, log_mel_spectrogram, pad_or_trim
 from .vad import VoiceActivityDetector
 
 
@@ -122,7 +122,8 @@ class StreamingTranscriber:
     # the token budget. Whisper doesn't need verbose instructions, just
     # key terms it might encounter in a telephony context.
     _TELEPHONY_PROMPT = (
-        "Telefonata. Email, telefono, indirizzo, codice fiscale."
+        "Telefonata. Email: chiocciola @, punto. "
+        "Telefono, indirizzo, codice fiscale, partita IVA."
     )
 
     def __init__(
@@ -248,6 +249,10 @@ class StreamingTranscriber:
         Token budget: Whisper decoder has 448 max tokens total.
         We must leave room for the actual transcription output.
         Budget: prompt ≤ 80 tokens (~18% of decoder capacity).
+
+        When initial_prompt is set, it is carried across ALL segments
+        (not just the first) to maintain domain conditioning — critical
+        for telephony where email/phone dictation can happen at any point.
         """
         MAX_PROMPT_TOKENS = 80  # leave 368 tokens for generated text
 
@@ -255,18 +260,26 @@ class StreamingTranscriber:
         sot = list(self._tokenizer.sot_sequence)
         sot.append(self._tokenizer.no_timestamps)
 
-        # Build prefix: initial_prompt OR previous_tokens (not both — avoids bloat)
+        # Budget for prefix tokens (everything before SOT sequence)
+        budget = MAX_PROMPT_TOKENS - len(sot) - 1  # -1 for sot_prev token
+
         prefix = []
-        if self.initial_prompt and not self._previous_tokens:
-            # First segment: use initial prompt for domain conditioning
-            prompt_tokens = self._tokenizer.encode(" " + self.initial_prompt.strip())
-            budget = MAX_PROMPT_TOKENS - len(sot)
-            prefix = [self._tokenizer.sot_prev] + prompt_tokens[:budget]
+        if self.initial_prompt:
+            # Domain prompt — capped at 15 tokens to leave room for context.
+            # Carried on EVERY segment so telephony vocabulary (chiocciola,
+            # punto, codice fiscale) is always available to the decoder.
+            ip_tokens = self._tokenizer.encode(" " + self.initial_prompt.strip())
+            ip_tokens = ip_tokens[:15]
+
+            if self._previous_tokens:
+                # Both: domain prompt + previous transcript for coherence
+                remaining = budget - len(ip_tokens)
+                prev = self._previous_tokens[-remaining:] if remaining > 0 else []
+                prefix = [self._tokenizer.sot_prev] + ip_tokens + prev
+            else:
+                prefix = [self._tokenizer.sot_prev] + ip_tokens
         elif self._previous_tokens:
-            # Subsequent segments: use previous context for coherence
-            # (more useful than repeating the static prompt)
-            budget = MAX_PROMPT_TOKENS - len(sot)
-            prev = self._previous_tokens[-(budget - 1):]  # -1 for sot_prev token
+            prev = self._previous_tokens[-budget:]
             prefix = [self._tokenizer.sot_prev] + prev
 
         return prefix + sot
@@ -274,29 +287,25 @@ class StreamingTranscriber:
     def _transcribe_segment(self, audio: np.ndarray) -> TranscriptionResult:
         """Transcribe a speech segment via CTranslate2 directly.
 
-        Computes a mel spectrogram proportional to the actual audio
-        duration (no 30s padding) and passes it straight to the
-        CTranslate2 C++ encoder and decoder. This is the key
-        optimization: a 2s segment produces ~200 mel frames instead
-        of the 3000 frames that faster-whisper would pad to.
+        Pads audio to 30 seconds and computes a standard 3000-frame mel
+        spectrogram, matching Whisper's training format. The encoder was
+        trained exclusively on 30s windows; shorter input degrades
+        comprehension because the positional embeddings and cross-attention
+        were calibrated for 1500 encoder positions.
         """
         self._load_model()
 
         t_start = time.perf_counter()
         duration_ms = len(audio) / SAMPLE_RATE * 1000
 
-        # Compute mel spectrogram — proportional to actual duration, no padding
-        mel = log_mel_spectrogram_chunk(audio, n_mels=self._n_mels)
-
-        # Pad very short segments to a minimum of 3 seconds (300 frames)
-        # to give the encoder enough context for stable decoding.
-        # This is far less wasteful than the 30s (3000 frame) padding
-        # that faster-whisper applies to ALL segments.
-        import torch
-
-        min_frames = 300  # ~3 seconds
-        if mel.shape[-1] < min_frames:
-            mel = torch.nn.functional.pad(mel, (0, min_frames - mel.shape[-1]))
+        # Pad raw audio to 30 seconds THEN compute mel. This is critical:
+        # 1. Whisper encoder expects exactly 3000 mel frames (→ 1500 positions)
+        # 2. Padding raw audio with silence produces correct low-energy mel
+        #    values, unlike zero-padding the mel directly
+        # 3. On GPU INT8 the encoder processes 3000 frames in ~40ms — no
+        #    meaningful latency penalty vs shorter mel
+        audio_padded = pad_or_trim(audio, N_SAMPLES)
+        mel = log_mel_spectrogram(audio_padded, n_mels=self._n_mels)
 
         # Shape for CTranslate2: (batch=1, n_mels, n_frames)
         features = np.expand_dims(mel.numpy(), axis=0).astype(np.float32)
