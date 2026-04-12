@@ -7,20 +7,30 @@
   (200-500 frames) instead of the 3000 frames Whisper's encoder was trained on.
   The encoder produced degraded features, causing empty output or hallucinations.
 * **Fix**: pad raw audio to 30 seconds with silence before computing mel, producing
-  exactly 3000 frames matching Whisper's training format. GPU INT8 encoder processes
-  3000 frames in ~138ms — acceptable for telephony latency budget.
+  exactly 3000 frames matching Whisper's training format.
 * Telephony prompt restored with `chiocciola`/`@`/`punto` vocabulary for email dictation
 * Domain prompt now carried across ALL segments (not just first) for persistent conditioning
-* Off-by-one in prompt token budget fixed (`sot_prev` was uncounted → 81 tokens instead of 80)
-* Guard against CTranslate2 `max_length` edge case with turbo model on short segments
+* Off-by-one in prompt token budget fixed (`sot_prev` was uncounted)
+* Guard against CTranslate2 `max_length` edge case on short segments
+* `no_speech_prob` filter (>0.6) prevents hallucinations on VAD false positives
+* CUDA warmup now uses production-size mel (3000 frames, was 300)
+* VAD speech counter/buffer mismatch fixed on chunk boundaries
 
 ### Changed — Default model switched to large-v3-turbo
 * Default `model_size` changed from `large-v3` to `large-v3-turbo`
 * Same encoder (32 layers, 128 mels), 4-layer decoder instead of 32
-* Benchmarked on 100 Italian audiobook segments:
-  - **turbo**: 13.5% WER, 190ms latency — 90% good, 8% warn, 2% bad
-  - **large-v3**: 12.0% WER, 457ms latency — 93% good, 6% warn, 1% bad
-* 1.5% WER tradeoff for 2.4x speed — acceptable for real-time telephony
+
+### Benchmark results (NVIDIA L4, INT8, beam=5)
+
+**1289 Italian audiobook segments:**
+
+| Model | WER | Good (<30%) | Bad (>60%) | Latency/seg |
+|-------|-----|-------------|------------|-------------|
+| large-v3-turbo | **10.5%** | 94.6% | 0.3% | **294ms** |
+| large-v3 | 12.0% | 93.0% | 1.0% | 457ms |
+
+**40 min real spoken Italian (conversational, with audience):**
+* 491 segments, 188ms avg latency, 0 segments filtered
 
 ## [streaming-v1] — 2026-04-11 (scalcerano fork)
 
