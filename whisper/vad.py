@@ -117,11 +117,14 @@ class VoiceActivityDetector:
 
             prob = self._get_speech_prob(frame)
 
+            # Use the actual slice length (not padded frame) for accurate counting
+            actual_len = min(self.frame_size, len(audio_chunk) - i)
+
             if prob >= self.threshold:
                 # Speech detected
                 self._silence_counter = 0
-                self._speech_counter += len(frame)
-                self._speech_buffer.append(audio_chunk[i : i + self.frame_size])
+                self._speech_counter += actual_len
+                self._speech_buffer.append(audio_chunk[i : i + actual_len])
 
                 if not self._is_speaking:
                     if self._speech_counter >= self.min_speech_samples:
@@ -137,10 +140,10 @@ class VoiceActivityDetector:
 
             else:
                 # Silence detected
-                self._silence_counter += len(frame)
+                self._silence_counter += actual_len
 
                 if self._is_speaking:
-                    self._speech_buffer.append(audio_chunk[i : i + self.frame_size])
+                    self._speech_buffer.append(audio_chunk[i : i + actual_len])
 
                     if self._silence_counter >= self.min_silence_samples:
                         # End of speech segment
@@ -153,7 +156,7 @@ class VoiceActivityDetector:
 
                 elif self._speech_counter > 0:
                     # Pre-speech phase: tolerate brief silence gaps
-                    self._speech_buffer.append(audio_chunk[i : i + self.frame_size])
+                    self._speech_buffer.append(audio_chunk[i : i + actual_len])
 
                     if self._silence_counter >= self._pre_speech_silence_limit:
                         # Too much silence, discard pre-speech accumulation

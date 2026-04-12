@@ -2,7 +2,7 @@
 
 This module provides a ``StreamingTranscriber`` that processes audio in
 real-time using VAD-guided chunking and the CTranslate2 inference backend
-for low-latency transcription (~150ms per segment on GPU with INT8).
+for low-latency transcription (~190ms per segment on L4 GPU with INT8).
 
 Typical usage for telephony::
 
@@ -167,8 +167,9 @@ class StreamingTranscriber:
             prompt_parts.append(initial_prompt)
         self.initial_prompt = " ".join(prompt_parts) if prompt_parts else None
 
-        self._ct2_model = None  # ctranslate2.models.Whisper
-        self._tokenizer = None  # faster_whisper tokenizer
+        self._ct2_model = None   # ctranslate2.models.Whisper
+        self._tokenizer = None   # faster_whisper tokenizer
+        self._StorageView = None # ctranslate2.StorageView (cached at load)
         self._vad = VoiceActivityDetector(
             threshold=vad_threshold,
             min_speech_ms=min_speech_ms,
@@ -208,6 +209,9 @@ class StreamingTranscriber:
                 "Install with: pip install faster-whisper"
             )
 
+        # Cache StorageView to avoid per-segment import lookup
+        self._StorageView = ctranslate2.StorageView
+
         # Download/convert model via faster-whisper, get the CTranslate2 path
         model_path = download_model(self.model_size)
 
@@ -230,10 +234,11 @@ class StreamingTranscriber:
             language=self.language,
         )
 
-        # Warm up CUDA kernels with a dummy inference so the first real
-        # segment doesn't pay the JIT compilation cost.
-        dummy_mel = np.zeros((1, self._n_mels, 300), dtype=np.float32)
-        dummy_features = ctranslate2.StorageView.from_array(dummy_mel)
+        # Warm up CUDA kernels with a FULL 3000-frame mel — must match
+        # production shape so JIT compilation covers the real code path.
+        # A 300-frame warmup is useless: different shape = different kernels.
+        dummy_mel = np.zeros((1, self._n_mels, N_FRAMES), dtype=np.float32)
+        dummy_features = self._StorageView.from_array(dummy_mel)
         prompt = list(self._tokenizer.sot_sequence)
         prompt.append(self._tokenizer.no_timestamps)
         self._ct2_model.generate(
@@ -304,18 +309,13 @@ class StreamingTranscriber:
         # 1. Whisper encoder expects exactly 3000 mel frames (→ 1500 positions)
         # 2. Padding raw audio with silence produces correct low-energy mel
         #    values, unlike zero-padding the mel directly
-        # 3. On GPU INT8 the encoder processes 3000 frames in ~40ms — no
-        #    meaningful latency penalty vs shorter mel
+        # 3. On L4 GPU INT8 the encoder processes 3000 frames in ~138ms
         audio_padded = pad_or_trim(audio, N_SAMPLES)
         mel = log_mel_spectrogram(audio_padded, n_mels=self._n_mels)
 
         # Shape for CTranslate2: (batch=1, n_mels, n_frames)
         features = np.expand_dims(mel.numpy(), axis=0).astype(np.float32)
-
-        # Encode audio — C++ kernel, processes only the real frames
-        import ctranslate2
-
-        features_sv = ctranslate2.StorageView.from_array(features)
+        features_sv = self._StorageView.from_array(features)
 
         # Detect language if not configured
         detected_language = self.language
@@ -358,6 +358,23 @@ class StreamingTranscriber:
         no_speech_prob = result.no_speech_prob if hasattr(result, 'no_speech_prob') else -1
         n_tokens = len(result.sequences_ids[0]) if result.sequences_ids and result.sequences_ids[0] else 0
         logger.info(f"[STT-DBG] generate: {(t_gen-t_mel)*1000:.0f}ms, tokens={n_tokens}, no_speech_prob={no_speech_prob:.3f}")
+
+        # Guard: if decoder says "no speech" with high confidence, the VAD
+        # made a false positive. Return empty rather than hallucinate.
+        # This prevents garbage like "grazie a tutti" on noise/music.
+        if no_speech_prob > 0.6:
+            logger.info(f"[STT-DBG] no_speech_prob={no_speech_prob:.3f} > 0.6 — skipping segment")
+            latency_ms = (time.perf_counter() - t_start) * 1000
+            self._segment_count += 1
+            self._total_audio_ms += duration_ms
+            self._total_latency_ms += latency_ms
+            return TranscriptionResult(
+                text="",
+                language=detected_language,
+                duration_ms=duration_ms,
+                latency_ms=latency_ms,
+                is_final=True,
+            )
 
         if not result.sequences_ids or not result.sequences_ids[0]:
             latency_ms = (time.perf_counter() - t_start) * 1000
