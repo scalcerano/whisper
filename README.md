@@ -201,19 +201,24 @@ transcriber.reset()
 ```
 Audio 16kHz PCM
   -> VoiceActivityDetector (Silero VAD, ~5ms)
-  -> Speech segments (1-5s, bounded by natural pauses)
-  -> CTranslate2 Whisper Large v3 INT8 (~140ms on GPU)
+  -> Speech segments (1-8s, bounded by natural pauses)
+  -> Pad to 30s + mel spectrogram (3000 frames, matches training)
+  -> CTranslate2 Whisper Large v3 INT8 (~100ms on GPU)
   -> TranscriptionResult (text + latency + language)
 ```
+
+Audio is always padded to 30 seconds before mel computation. This matches
+Whisper's training format (3000 mel frames → 1500 encoder positions) and
+is critical for comprehension quality. The latency penalty is minimal on GPU.
 
 | Component | Latency |
 |-----------|---------|
 | Silero VAD | ~5ms |
-| Mel spectrogram | ~10ms |
-| CTranslate2 encoder (INT8) | ~60ms |
+| Mel spectrogram (30s) | ~15ms |
+| CTranslate2 encoder (INT8) | ~40ms |
 | CTranslate2 decoder | ~50ms |
 | Overhead | ~25ms |
-| **Total** | **~150ms** |
+| **Total** | **~135ms** |
 
 ### Key features
 

@@ -1,11 +1,24 @@
 # CHANGELOG
 
+## [streaming-v2] — 2026-04-12 (scalcerano fork)
+
+### Fixed — Critical STT comprehension failure
+* **Root cause**: mel spectrogram was computed proportional to actual audio duration
+  (200-500 frames) instead of the 3000 frames Whisper's encoder was trained on.
+  The encoder produced degraded features, causing empty output or hallucinations.
+* **Fix**: pad raw audio to 30 seconds with silence before computing mel, producing
+  exactly 3000 frames matching Whisper's training format. GPU INT8 encoder processes
+  3000 frames in ~40ms — negligible latency penalty.
+* Telephony prompt restored with `chiocciola`/`@`/`punto` vocabulary for email dictation
+* Domain prompt now carried across ALL segments (not just first) for persistent conditioning
+* Off-by-one in prompt token budget fixed (`sot_prev` was uncounted → 81 tokens instead of 80)
+
 ## [streaming-v1] — 2026-04-11 (scalcerano fork)
 
 ### Added
 * **Streaming STT module** (`whisper/streaming.py`) — real-time transcription via CTranslate2 with VAD-guided chunking, targeting sub-200ms latency on GPU
 * **Voice Activity Detection** (`whisper/vad.py`) — Silero VAD wrapper with telephony-optimized defaults (min_silence_ms=600, min_speech_ms=400)
-* **Variable-length mel spectrogram** (`whisper/audio.py`) — `log_mel_spectrogram_chunk()` without 30s padding
+* **Variable-length mel spectrogram** (`whisper/audio.py`) — `log_mel_spectrogram_chunk()` utility function
 * **Telephony hints** — `telephony_hints=True` parameter for email/address/phone spelling recognition
 * **CUDA warmup** — dummy inference at model load to eliminate first-segment cold start
 * Optional dependency: `faster-whisper>=1.1.0` via `pip install openai-whisper[streaming]`
@@ -21,7 +34,7 @@
 ### Performance
 * Latency: 73-250ms per segment on NVIDIA L4 (Large v3, INT8, beam=5)
 * RTF: 0.05-0.08 (processes 1s of audio in 50-80ms)
-* Direct CTranslate2 C++ API — bypasses faster-whisper's 30s mel padding
+* CTranslate2 C++ API for direct encoder/decoder control
 
 ## [v20250625](https://github.com/openai/whisper/releases/tag/v20250625)
 
