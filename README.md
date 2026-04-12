@@ -368,6 +368,222 @@ call_2.feed(audio_from_caller_2)
 | `no_speech_prob` | float | Probability of no speech 0.0–1.0 |
 | `is_final` | bool | True for completed segments, False for interim partials |
 
+### API reference
+
+#### `StreamingTranscriber(...)` — Constructor
+
+Creates a new transcriber instance. The model is NOT loaded until the first `feed()` call.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `model_size` | str | `"large-v3-turbo"` | Whisper model. `"large-v3"` for max quality (~450ms), `"large-v3-turbo"` for speed (~190ms) |
+| `device` | str | `"cuda"` | `"cuda"` or `"cpu"` |
+| `compute_type` | str | `"int8"` | CTranslate2 precision: `"int8"`, `"float16"`, `"int8_float16"`, `"float32"` |
+| `language` | str \| None | `None` | ISO 639-1 code (`"it"`, `"en"`, `"de"`, ...). None = auto-detect per segment |
+| `beam_size` | int | `5` | Beam search width. Higher = better quality, more latency |
+| `vad_threshold` | float | `0.5` | Speech probability threshold (0.0–1.0). Lower = more sensitive |
+| `min_speech_ms` | int | `400` | Minimum speech duration (ms) before transcription triggers |
+| `min_silence_ms` | int | `600` | Silence duration (ms) to end a speech segment |
+| `max_speech_ms` | int | `8000` | Maximum segment duration before forced split |
+| `initial_prompt` | str \| None | `None` | Domain vocabulary to condition the decoder (e.g. `"immobiliare, mutuo"`) |
+| `telephony_hints` | bool | `False` | Prepend email/address/phone spelling vocabulary (chiocciola, punto, ...) |
+| `interim_interval_ms` | int \| None | `None` | Emit `is_final=False` partial results every N ms of speech. None = disabled |
+
+#### `feed(audio_chunk, sample_rate=16000)` → `List[TranscriptionResult]`
+
+Feed audio into the pipeline. Returns completed transcriptions (and/or interims if enabled).
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `audio_chunk` | np.ndarray | — | Audio samples. Accepts float32/int16, mono/stereo, any sample rate |
+| `sample_rate` | int | `16000` | Input sample rate. Auto-resampled to 16kHz if different |
+
+**Returns:** List of `TranscriptionResult`. Empty list if no segment is complete yet.
+
+**Typical chunk sizes:** 20ms (320 samples), 100ms (1600 samples), or any size. The VAD buffers internally.
+
+#### `flush()` → `List[TranscriptionResult]`
+
+Call at end of conversation to transcribe any audio remaining in the VAD buffer.
+Always call this — otherwise the last utterance may be lost.
+
+#### `reset()`
+
+Clear all state for a new conversation: VAD buffer, decoder context, statistics.
+The model stays loaded in VRAM — only per-call state is reset.
+
+#### `stats` → `dict`
+
+Per-conversation statistics:
+
+```python
+{
+    "segments_processed": 12,       # total segments (including filtered)
+    "total_audio_ms": 45000.0,      # total speech audio processed
+    "total_latency_ms": 2400.0,     # total inference time
+    "average_latency_ms": 200.0,    # average per segment
+    "model_size": "large-v3-turbo",
+    "compute_type": "int8",
+    "device": "cuda",
+    "language": "it",
+}
+```
+
+### Utility functions
+
+#### `whisperng.audio.load_audio(file, sr=16000)` → `np.ndarray`
+
+Load any audio file (WAV, MP3, FLAC, OGG, ...) as float32 mono at the given sample rate.
+Requires `ffmpeg` in PATH.
+
+```python
+from whisperng.audio import load_audio
+audio = load_audio("call.wav")        # float32 numpy array, 16kHz mono
+audio = load_audio("call.mp3")        # any format ffmpeg supports
+```
+
+#### `whisperng.vad.VoiceActivityDetector` — Direct VAD access
+
+For custom pipelines that need speech detection without transcription:
+
+```python
+from whisperng.vad import VoiceActivityDetector
+
+vad = VoiceActivityDetector(
+    threshold=0.5,         # speech probability threshold
+    min_speech_ms=400,     # minimum speech to trigger
+    min_silence_ms=600,    # silence to end segment
+    max_speech_ms=8000,    # max segment before forced split
+    sample_rate=16000,
+)
+
+# Process audio chunks
+segments = vad.process(audio_chunk)   # returns list of complete speech segments
+segments = vad.flush()                # get remaining speech at end
+vad.reset()                           # clear for new conversation
+
+# State inspection
+vad.is_speaking          # bool: currently in active speech?
+vad.speech_duration_ms   # float: accumulated speech duration
+vad.buffered_duration_ms # float: total buffered audio duration
+vad.peek_buffer()        # np.ndarray or None: current buffer without consuming
+```
+
+### Use cases
+
+#### 1. Real-time telephony (Asterisk AudioSocket)
+
+The primary use case. Audio arrives in small chunks from a SIP call:
+
+```python
+import asyncio
+from whisperng.streaming import StreamingTranscriber
+
+transcriber = StreamingTranscriber(
+    model_size="large-v3-turbo",
+    device="cuda",
+    compute_type="int8",
+    language="it",
+    telephony_hints=True,
+    interim_interval_ms=1000,
+)
+
+async def handle_call(audio_socket):
+    """Handle one phone call from Asterisk AudioSocket."""
+    while True:
+        # Receive 20ms audio frame from Asterisk (int16, 16kHz)
+        pcm_data = await audio_socket.read(640)  # 320 samples × 2 bytes
+        if not pcm_data:
+            break
+
+        audio_chunk = np.frombuffer(pcm_data, dtype=np.int16)
+        for result in transcriber.feed(audio_chunk, sample_rate=16000):
+            if result.is_final:
+                await send_to_brain(result.text, result.confidence)
+            else:
+                await send_interim_to_brain(result.text)
+
+    # End of call — flush remaining audio
+    for result in transcriber.flush():
+        await send_to_brain(result.text, result.confidence)
+
+    transcriber.reset()  # ready for next call
+```
+
+#### 2. Batch transcription of call recordings
+
+Process recorded calls with full streaming pipeline (VAD segmentation + confidence):
+
+```python
+from whisperng.audio import load_audio, SAMPLE_RATE
+from whisperng.streaming import StreamingTranscriber
+
+transcriber = StreamingTranscriber(language="it")
+
+for wav_file in call_recordings:
+    audio = load_audio(wav_file)
+    transcriber.reset()
+
+    transcript = []
+    chunk_size = int(SAMPLE_RATE * 0.1)
+    for i in range(0, len(audio), chunk_size):
+        for r in transcriber.feed(audio[i : i + chunk_size]):
+            transcript.append({
+                "text": r.text,
+                "confidence": r.confidence,
+                "duration_ms": r.duration_ms,
+            })
+    for r in transcriber.flush():
+        transcript.append({"text": r.text, "confidence": r.confidence})
+
+    full_text = " ".join(t["text"] for t in transcript)
+    avg_conf = sum(t["confidence"] for t in transcript) / len(transcript)
+    print(f"{wav_file}: {full_text} (conf={avg_conf:.2f})")
+```
+
+#### 3. Multi-language call center (concurrent calls)
+
+10 concurrent calls in different languages, sharing one GPU model:
+
+```python
+import threading
+from whisperng.streaming import StreamingTranscriber
+
+# All instances share the same CTranslate2 model in VRAM (~6GB total)
+sessions = {
+    "call_001": StreamingTranscriber(language="it"),
+    "call_002": StreamingTranscriber(language="en"),
+    "call_003": StreamingTranscriber(language="de"),
+    # ... up to ~20 concurrent sessions on L40S (48GB)
+}
+
+def handle_audio(call_id, audio_chunk, sample_rate):
+    transcriber = sessions[call_id]
+    results = transcriber.feed(audio_chunk, sample_rate=sample_rate)
+    for r in results:
+        process_result(call_id, r)
+
+def end_call(call_id):
+    transcriber = sessions.pop(call_id)
+    for r in transcriber.flush():
+        process_result(call_id, r)
+```
+
+#### 4. Low-confidence retry logic
+
+Ask the caller to repeat when transcription confidence is low:
+
+```python
+for result in transcriber.feed(audio_chunk):
+    if result.is_final:
+        if result.confidence < 0.3:
+            tts.speak("Mi scusi, non ho capito. Può ripetere?")
+        elif result.confidence < 0.6:
+            tts.speak(f"Ho capito: {result.text}. È corretto?")
+        else:
+            process_with_confidence(result.text)
+```
+
 ### Supported languages
 
 All Whisper-supported languages work. Primary targets for telephony:
