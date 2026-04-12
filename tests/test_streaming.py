@@ -292,6 +292,22 @@ class TestTranscriptionResult:
         assert r.text == "Ciao mondo"
         assert r.language == "it"
         assert r.is_final is True
+        assert r.confidence == 0.0  # default
+        assert r.no_speech_prob == 0.0  # default
+
+    def test_confidence_and_no_speech(self):
+        from whisper.streaming import TranscriptionResult
+
+        r = TranscriptionResult(
+            text="test",
+            language="it",
+            duration_ms=1000.0,
+            latency_ms=100.0,
+            confidence=0.85,
+            no_speech_prob=0.02,
+        )
+        assert r.confidence == 0.85
+        assert r.no_speech_prob == 0.02
 
     def test_interim_result(self):
         from whisper.streaming import TranscriptionResult
@@ -304,3 +320,58 @@ class TestTranscriptionResult:
             is_final=False,
         )
         assert r.is_final is False
+
+
+# ---------------------------------------------------------------------------
+# Tests: Audio normalization
+# ---------------------------------------------------------------------------
+
+
+class TestAudioNormalization:
+    """Tests for automatic audio format normalization."""
+
+    def test_int16_to_float32(self):
+        from whisper.streaming import StreamingTranscriber
+
+        audio_int16 = np.array([0, 16384, -16384, 32767], dtype=np.int16)
+        result = StreamingTranscriber._normalize_audio(audio_int16, 16000)
+        assert result.dtype == np.float32
+        assert abs(result[1] - 0.5) < 0.001
+        assert abs(result[3] - 1.0) < 0.001
+
+    def test_stereo_to_mono(self):
+        from whisper.streaming import StreamingTranscriber
+
+        stereo = np.array([[0.5, -0.5], [0.3, -0.3]], dtype=np.float32)
+        result = StreamingTranscriber._normalize_audio(stereo, 16000)
+        assert result.ndim == 1
+        assert abs(result[0]) < 0.001  # (0.5 + -0.5) / 2
+
+    def test_passthrough_float32_16khz(self):
+        from whisper.streaming import StreamingTranscriber
+
+        audio = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+        result = StreamingTranscriber._normalize_audio(audio, 16000)
+        assert result.dtype == np.float32
+        np.testing.assert_array_equal(result, audio)
+
+    def test_resample_8khz(self):
+        from whisper.streaming import StreamingTranscriber
+
+        # 8kHz sine wave, 0.1 seconds = 800 samples
+        t = np.linspace(0, 0.1, 800, dtype=np.float32)
+        audio_8k = np.sin(2 * np.pi * 440 * t)
+        result = StreamingTranscriber._normalize_audio(audio_8k, 8000)
+        # Should have ~1600 samples (16kHz * 0.1s)
+        assert 1550 <= len(result) <= 1650
+        assert result.dtype == np.float32
+
+    def test_resample_48khz(self):
+        from whisper.streaming import StreamingTranscriber
+
+        # 48kHz, 0.1 seconds = 4800 samples
+        t = np.linspace(0, 0.1, 4800, dtype=np.float32)
+        audio_48k = np.sin(2 * np.pi * 440 * t)
+        result = StreamingTranscriber._normalize_audio(audio_48k, 48000)
+        # Should have ~1600 samples
+        assert 1550 <= len(result) <= 1650

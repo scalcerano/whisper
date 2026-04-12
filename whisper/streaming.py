@@ -51,6 +51,14 @@ class TranscriptionResult:
         Duration of the speech segment in milliseconds.
     latency_ms : float
         Processing latency in milliseconds (audio received to text produced).
+    confidence : float
+        Transcription confidence (0.0–1.0). Derived from the decoder's
+        average log-probability. Values above 0.6 are generally reliable;
+        below 0.3 suggest the system should ask the caller to repeat.
+    no_speech_prob : float
+        Probability that the segment contains no speech (0.0–1.0).
+        High values (>0.6) indicate the VAD passed noise or silence
+        that the decoder recognized as non-speech.
     is_final : bool
         Whether this is a final result (True) or interim (False).
     """
@@ -59,6 +67,8 @@ class TranscriptionResult:
     language: str
     duration_ms: float
     latency_ms: float
+    confidence: float = 0.0
+    no_speech_prob: float = 0.0
     is_final: bool = True
 
 
@@ -348,46 +358,55 @@ class StreamingTranscriber:
             suppress_blank=True,
             suppress_tokens=[-1],
             return_no_speech_prob=True,
+            return_scores=True,
         )
 
         t_gen = time.perf_counter()
 
-        # Decode tokens to text — guard against empty results from
-        # CTranslate2 on very short or silent audio segments.
+        # Extract decoder metrics for confidence scoring
         result = results[0]
-        no_speech_prob = result.no_speech_prob if hasattr(result, 'no_speech_prob') else -1
+        seg_no_speech = result.no_speech_prob if hasattr(result, 'no_speech_prob') else 0.0
         n_tokens = len(result.sequences_ids[0]) if result.sequences_ids and result.sequences_ids[0] else 0
-        logger.info(f"[STT-DBG] generate: {(t_gen-t_mel)*1000:.0f}ms, tokens={n_tokens}, no_speech_prob={no_speech_prob:.3f}")
+
+        # Confidence = exp(avg_logprob). CTranslate2 scores[0] is the
+        # cumulative log-probability for the top beam. Normalizing by
+        # token count gives avg_logprob; exp() maps to 0.0–1.0 range.
+        import math
+        if hasattr(result, 'scores') and result.scores and n_tokens > 0:
+            avg_logprob = result.scores[0] / n_tokens
+            seg_confidence = math.exp(max(avg_logprob, -10.0))  # clamp to avoid underflow
+        else:
+            seg_confidence = 0.0
+
+        logger.info(
+            f"[STT-DBG] generate: {(t_gen-t_mel)*1000:.0f}ms, tokens={n_tokens}, "
+            f"no_speech={seg_no_speech:.3f}, confidence={seg_confidence:.3f}"
+        )
+
+        # Helper to build empty results (no-speech filter or empty decode)
+        def _empty_result() -> TranscriptionResult:
+            lat = (time.perf_counter() - t_start) * 1000
+            self._segment_count += 1
+            self._total_audio_ms += duration_ms
+            self._total_latency_ms += lat
+            return TranscriptionResult(
+                text="",
+                language=detected_language,
+                duration_ms=duration_ms,
+                latency_ms=lat,
+                confidence=seg_confidence,
+                no_speech_prob=seg_no_speech,
+                is_final=True,
+            )
 
         # Guard: if decoder says "no speech" with high confidence, the VAD
         # made a false positive. Return empty rather than hallucinate.
-        # This prevents garbage like "grazie a tutti" on noise/music.
-        if no_speech_prob > 0.6:
-            logger.info(f"[STT-DBG] no_speech_prob={no_speech_prob:.3f} > 0.6 — skipping segment")
-            latency_ms = (time.perf_counter() - t_start) * 1000
-            self._segment_count += 1
-            self._total_audio_ms += duration_ms
-            self._total_latency_ms += latency_ms
-            return TranscriptionResult(
-                text="",
-                language=detected_language,
-                duration_ms=duration_ms,
-                latency_ms=latency_ms,
-                is_final=True,
-            )
+        if seg_no_speech > 0.6:
+            logger.info(f"[STT-DBG] no_speech_prob={seg_no_speech:.3f} > 0.6 — skipping segment")
+            return _empty_result()
 
         if not result.sequences_ids or not result.sequences_ids[0]:
-            latency_ms = (time.perf_counter() - t_start) * 1000
-            self._segment_count += 1
-            self._total_audio_ms += duration_ms
-            self._total_latency_ms += latency_ms
-            return TranscriptionResult(
-                text="",
-                language=detected_language,
-                duration_ms=duration_ms,
-                latency_ms=latency_ms,
-                is_final=True,
-            )
+            return _empty_result()
 
         output_tokens = result.sequences_ids[0]
 
@@ -412,10 +431,66 @@ class StreamingTranscriber:
             language=detected_language,
             duration_ms=duration_ms,
             latency_ms=latency_ms,
+            confidence=seg_confidence,
+            no_speech_prob=seg_no_speech,
             is_final=True,
         )
 
-    def feed(self, audio_chunk: np.ndarray) -> List[TranscriptionResult]:
+    @staticmethod
+    def _normalize_audio(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+        """Normalize audio to float32 mono at 16kHz.
+
+        Handles common telephony formats without requiring the caller
+        to pre-process:
+        - int16 → float32 (divide by 32768)
+        - stereo → mono (average channels)
+        - any sample rate → 16kHz (torchaudio resample)
+
+        Parameters
+        ----------
+        audio : np.ndarray
+            Raw audio samples (float32/int16, mono/stereo).
+        sample_rate : int
+            Input sample rate.
+
+        Returns
+        -------
+        np.ndarray
+            Float32 mono audio at 16kHz.
+        """
+        # int16 → float32
+        if audio.dtype == np.int16:
+            audio = audio.astype(np.float32) / 32768.0
+        elif audio.dtype != np.float32:
+            audio = audio.astype(np.float32)
+
+        # stereo → mono
+        if audio.ndim == 2:
+            audio = audio.mean(axis=1 if audio.shape[1] <= 2 else 0)
+        elif audio.ndim > 2:
+            audio = audio.reshape(-1)
+
+        # resample to 16kHz if needed
+        if sample_rate != SAMPLE_RATE:
+            import torch
+            try:
+                import torchaudio.functional as F
+                audio_t = torch.from_numpy(audio)
+                audio_t = F.resample(audio_t, sample_rate, SAMPLE_RATE)
+                audio = audio_t.numpy()
+            except ImportError:
+                raise ImportError(
+                    f"torchaudio is required for resampling from {sample_rate}Hz. "
+                    "Install with: pip install torchaudio"
+                )
+
+        return audio
+
+    def feed(
+        self,
+        audio_chunk: np.ndarray,
+        sample_rate: int = SAMPLE_RATE,
+    ) -> List[TranscriptionResult]:
         """Feed an audio chunk and get transcription results.
 
         Call this method with each incoming audio frame from the telephony
@@ -426,8 +501,11 @@ class StreamingTranscriber:
         Parameters
         ----------
         audio_chunk : np.ndarray
-            Audio samples as float32 at 16kHz. Typical frame sizes for
-            telephony: 20ms (320 samples) or 30ms (480 samples).
+            Audio samples. Accepts float32 or int16, mono or stereo.
+            Automatically resampled to 16kHz if ``sample_rate`` differs.
+        sample_rate : int
+            Sample rate of the input audio (default: 16000). Common
+            telephony rates: 8000 (PSTN), 16000 (wideband), 48000 (VoIP).
 
         Returns
         -------
@@ -435,6 +513,7 @@ class StreamingTranscriber:
             Transcription results for any completed speech segments.
             Empty list if no segment is complete yet.
         """
+        audio_chunk = self._normalize_audio(audio_chunk, sample_rate)
         speech_segments = self._vad.process(audio_chunk)
         results = []
 
