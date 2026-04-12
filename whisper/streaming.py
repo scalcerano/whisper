@@ -7,7 +7,7 @@ for low-latency transcription (~150ms per segment on GPU with INT8).
 Typical usage for telephony::
 
     transcriber = StreamingTranscriber(
-        model_size="large-v3",
+        model_size="large-v3-turbo",
         device="cuda",
         compute_type="int8",
         language="it",
@@ -91,7 +91,9 @@ class StreamingTranscriber:
     Parameters
     ----------
     model_size : str
-        Whisper model size (e.g. "large-v3", "medium", "small").
+        Whisper model size. Default "large-v3-turbo" — same encoder as
+        large-v3 with a 4-layer decoder for ~190ms latency on L4 GPU.
+        Use "large-v3" (32-layer decoder, ~450ms) when max accuracy is needed.
     device : str
         Inference device ("cuda" or "cpu").
     compute_type : str
@@ -128,7 +130,7 @@ class StreamingTranscriber:
 
     def __init__(
         self,
-        model_size: str = "large-v3",
+        model_size: str = "large-v3-turbo",
         device: str = "cuda",
         compute_type: str = "int8",
         language: Optional[str] = None,

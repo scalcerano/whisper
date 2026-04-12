@@ -8,10 +8,19 @@
   The encoder produced degraded features, causing empty output or hallucinations.
 * **Fix**: pad raw audio to 30 seconds with silence before computing mel, producing
   exactly 3000 frames matching Whisper's training format. GPU INT8 encoder processes
-  3000 frames in ~40ms — negligible latency penalty.
+  3000 frames in ~138ms — acceptable for telephony latency budget.
 * Telephony prompt restored with `chiocciola`/`@`/`punto` vocabulary for email dictation
 * Domain prompt now carried across ALL segments (not just first) for persistent conditioning
 * Off-by-one in prompt token budget fixed (`sot_prev` was uncounted → 81 tokens instead of 80)
+* Guard against CTranslate2 `max_length` edge case with turbo model on short segments
+
+### Changed — Default model switched to large-v3-turbo
+* Default `model_size` changed from `large-v3` to `large-v3-turbo`
+* Same encoder (32 layers, 128 mels), 4-layer decoder instead of 32
+* Benchmarked on 100 Italian audiobook segments:
+  - **turbo**: 13.5% WER, 190ms latency — 90% good, 8% warn, 2% bad
+  - **large-v3**: 12.0% WER, 457ms latency — 93% good, 6% warn, 1% bad
+* 1.5% WER tradeoff for 2.4x speed — acceptable for real-time telephony
 
 ## [streaming-v1] — 2026-04-11 (scalcerano fork)
 

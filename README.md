@@ -176,7 +176,7 @@ pip install "openai-whisper[streaming] @ git+https://github.com/scalcerano/whisp
 from whisper import StreamingTranscriber
 
 transcriber = StreamingTranscriber(
-    model_size="large-v3",
+    model_size="large-v3-turbo",  # same encoder as large-v3, 2.4x faster decoder
     device="cuda",
     compute_type="int8",
     language="it",
@@ -203,7 +203,7 @@ Audio 16kHz PCM
   -> VoiceActivityDetector (Silero VAD, ~5ms)
   -> Speech segments (1-8s, bounded by natural pauses)
   -> Pad to 30s + mel spectrogram (3000 frames, matches training)
-  -> CTranslate2 Whisper Large v3 INT8 (~100ms on GPU)
+  -> CTranslate2 Whisper Large v3 Turbo INT8 (~190ms on GPU)
   -> TranscriptionResult (text + latency + language)
 ```
 
@@ -214,11 +214,11 @@ is critical for comprehension quality. The latency penalty is minimal on GPU.
 | Component | Latency |
 |-----------|---------|
 | Silero VAD | ~5ms |
-| Mel spectrogram (30s) | ~15ms |
-| CTranslate2 encoder (INT8) | ~40ms |
-| CTranslate2 decoder | ~50ms |
-| Overhead | ~25ms |
-| **Total** | **~135ms** |
+| Mel spectrogram (30s) | ~1ms |
+| CTranslate2 encoder (INT8) | ~138ms |
+| CTranslate2 decoder (turbo, 4 layers) | ~50ms |
+| Overhead | ~5ms |
+| **Total** | **~190ms** |
 
 ### Key features
 
@@ -236,7 +236,7 @@ Italian, English, German, French, Spanish, Portuguese (and all other Whisper-sup
 
 ```python
 StreamingTranscriber(
-    model_size="large-v3",      # any Whisper model
+    model_size="large-v3-turbo", # default; use "large-v3" for max accuracy
     device="cuda",              # "cuda" or "cpu"
     compute_type="int8",        # int8, float16, int8_float16, float32
     language="it",              # None for auto-detection
