@@ -138,6 +138,11 @@ class StreamingTranscriber:
         "Telefono, indirizzo, codice fiscale, partita IVA."
     )
 
+    # Class-level model cache: multiple instances with the same config
+    # share one CTranslate2 model in VRAM. Each instance keeps its own
+    # VAD, prompt context, and statistics. Key = "model_size:device:compute_type".
+    _model_cache: dict = {}
+
     def __init__(
         self,
         model_size: str = "large-v3-turbo",
@@ -151,6 +156,7 @@ class StreamingTranscriber:
         max_speech_ms: int = 8000,
         initial_prompt: Optional[str] = None,
         telephony_hints: bool = False,
+        interim_interval_ms: Optional[int] = None,
     ):
         if model_size not in _CT2_MODEL_SIZES:
             raise ValueError(
@@ -177,8 +183,8 @@ class StreamingTranscriber:
             prompt_parts.append(initial_prompt)
         self.initial_prompt = " ".join(prompt_parts) if prompt_parts else None
 
-        self._ct2_model = None   # ctranslate2.models.Whisper
-        self._tokenizer = None   # faster_whisper tokenizer
+        self._ct2_model = None   # ctranslate2.models.Whisper (may be shared)
+        self._tokenizer = None   # faster_whisper tokenizer (per-instance, language-specific)
         self._StorageView = None # ctranslate2.StorageView (cached at load)
         self._vad = VoiceActivityDetector(
             threshold=vad_threshold,
@@ -193,6 +199,11 @@ class StreamingTranscriber:
             "large-v3", "large", "large-v3-turbo", "turbo",
         } else 80
 
+        # Interim results: emit partial transcriptions during active speech.
+        # None = disabled. Set to e.g. 1000 for an interim every 1 second.
+        self._interim_interval_ms = interim_interval_ms
+        self._last_interim_speech_ms: float = 0.0
+
         # Context tracking for cross-segment coherence
         self._previous_tokens: List[int] = []
         self._segment_count: int = 0
@@ -200,11 +211,12 @@ class StreamingTranscriber:
         self._total_latency_ms: float = 0.0
 
     def _load_model(self):
-        """Lazy-load the CTranslate2 Whisper model on first use.
+        """Lazy-load or reuse the CTranslate2 Whisper model.
 
-        Uses faster-whisper only for model download and conversion to
-        CTranslate2 format. All inference goes through the CTranslate2
-        API directly, bypassing faster-whisper's 30s padding.
+        The heavy CTranslate2 model is cached at the class level so
+        multiple StreamingTranscriber instances (concurrent calls) share
+        one model in VRAM.  Only the tokenizer is per-instance because
+        it carries language-specific state.
         """
         if self._ct2_model is not None:
             return
@@ -219,20 +231,30 @@ class StreamingTranscriber:
                 "Install with: pip install faster-whisper"
             )
 
-        # Cache StorageView to avoid per-segment import lookup
         self._StorageView = ctranslate2.StorageView
 
-        # Download/convert model via faster-whisper, get the CTranslate2 path
-        model_path = download_model(self.model_size)
+        # Check class-level cache for a shared model
+        cache_key = f"{self.model_size}:{self.device}:{self.compute_type}"
+        if cache_key in StreamingTranscriber._model_cache:
+            cached = StreamingTranscriber._model_cache[cache_key]
+            self._ct2_model = cached["model"]
+            model_path = cached["model_path"]
+            logger.info(f"[STT] Reusing cached model for {cache_key}")
+        else:
+            # First instance for this config — download and load
+            model_path = download_model(self.model_size)
+            self._ct2_model = ctranslate2.models.Whisper(
+                model_path,
+                device=self.device,
+                compute_type=self.compute_type,
+            )
+            StreamingTranscriber._model_cache[cache_key] = {
+                "model": self._ct2_model,
+                "model_path": model_path,
+            }
+            logger.info(f"[STT] Loaded new model for {cache_key}")
 
-        # Load CTranslate2 model directly — this is the C++ engine
-        self._ct2_model = ctranslate2.models.Whisper(
-            model_path,
-            device=self.device,
-            compute_type=self.compute_type,
-        )
-
-        # Build tokenizer for prompt encoding and text decoding
+        # Tokenizer is per-instance (language-specific)
         from tokenizers import Tokenizer as HFTokenizer
 
         tokenizer_path = os.path.join(model_path, "tokenizer.json")
@@ -244,18 +266,20 @@ class StreamingTranscriber:
             language=self.language,
         )
 
-        # Warm up CUDA kernels with a FULL 3000-frame mel — must match
-        # production shape so JIT compilation covers the real code path.
-        # A 300-frame warmup is useless: different shape = different kernels.
-        dummy_mel = np.zeros((1, self._n_mels, N_FRAMES), dtype=np.float32)
-        dummy_features = self._StorageView.from_array(dummy_mel)
-        prompt = list(self._tokenizer.sot_sequence)
-        prompt.append(self._tokenizer.no_timestamps)
-        self._ct2_model.generate(
-            dummy_features, [prompt],
-            beam_size=self.beam_size,
-            max_length=1,
-        )
+        # Warm up CUDA kernels with production-size mel (3000 frames).
+        # Only needed once per cache entry — subsequent instances skip.
+        if "warmed_up" not in StreamingTranscriber._model_cache[cache_key]:
+            dummy_mel = np.zeros((1, self._n_mels, N_FRAMES), dtype=np.float32)
+            dummy_features = self._StorageView.from_array(dummy_mel)
+            prompt = list(self._tokenizer.sot_sequence)
+            prompt.append(self._tokenizer.no_timestamps)
+            self._ct2_model.generate(
+                dummy_features, [prompt],
+                beam_size=self.beam_size,
+                max_length=1,
+            )
+            StreamingTranscriber._model_cache[cache_key]["warmed_up"] = True
+            logger.info(f"[STT] CUDA warmup complete for {cache_key}")
 
     def _build_prompt_tokens(self) -> List[int]:
         """Build the decoder prompt token sequence.
@@ -510,7 +534,9 @@ class StreamingTranscriber:
         Returns
         -------
         list of TranscriptionResult
-            Transcription results for any completed speech segments.
+            Transcription results for any completed speech segments
+            (``is_final=True``) and/or interim partial results
+            (``is_final=False``) if ``interim_interval_ms`` is set.
             Empty list if no segment is complete yet.
         """
         audio_chunk = self._normalize_audio(audio_chunk, sample_rate)
@@ -521,6 +547,44 @@ class StreamingTranscriber:
             result = self._transcribe_segment(segment_audio)
             if result.text:  # Skip empty transcriptions
                 results.append(result)
+            # Segment closed — reset interim tracking for next segment
+            self._last_interim_speech_ms = 0.0
+
+        # Interim results: if speech is active and enough has accumulated
+        # since the last interim emission, peek the buffer and transcribe.
+        if (
+            self._interim_interval_ms is not None
+            and self._vad.is_speaking
+            and self._vad.speech_duration_ms - self._last_interim_speech_ms
+            >= self._interim_interval_ms
+        ):
+            buffer = self._vad.peek_buffer()
+            if buffer is not None:
+                # Save context — interim must NOT update cross-segment state
+                saved_tokens = self._previous_tokens[:]
+                saved_count = self._segment_count
+                saved_audio = self._total_audio_ms
+                saved_latency = self._total_latency_ms
+
+                interim = self._transcribe_segment(buffer)
+
+                # Restore context — only final results affect state
+                self._previous_tokens = saved_tokens
+                self._segment_count = saved_count
+                self._total_audio_ms = saved_audio
+                self._total_latency_ms = saved_latency
+
+                if interim.text:
+                    results.append(TranscriptionResult(
+                        text=interim.text,
+                        language=interim.language,
+                        duration_ms=interim.duration_ms,
+                        latency_ms=interim.latency_ms,
+                        confidence=interim.confidence,
+                        no_speech_prob=interim.no_speech_prob,
+                        is_final=False,
+                    ))
+                self._last_interim_speech_ms = self._vad.speech_duration_ms
 
         return results
 
@@ -556,6 +620,7 @@ class StreamingTranscriber:
         self._segment_count = 0
         self._total_audio_ms = 0.0
         self._total_latency_ms = 0.0
+        self._last_interim_speech_ms = 0.0
 
     @property
     def stats(self) -> dict:

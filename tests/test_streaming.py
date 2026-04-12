@@ -375,3 +375,133 @@ class TestAudioNormalization:
         result = StreamingTranscriber._normalize_audio(audio_48k, 48000)
         # Should have ~1600 samples
         assert 1550 <= len(result) <= 1650
+
+
+# ---------------------------------------------------------------------------
+# Tests: VAD peek_buffer
+# ---------------------------------------------------------------------------
+
+
+class TestVADPeekBuffer:
+    """Tests for VAD buffer peeking (used by interim results)."""
+
+    def test_peek_empty_buffer(self):
+        from whisper.vad import VoiceActivityDetector
+
+        vad = VoiceActivityDetector()
+        assert vad.peek_buffer() is None
+
+    def test_peek_not_speaking(self):
+        from whisper.vad import VoiceActivityDetector
+
+        vad = VoiceActivityDetector()
+        vad._speech_buffer = [np.zeros(480)]
+        vad._is_speaking = False
+        assert vad.peek_buffer() is None  # not confirmed speech
+
+    def test_peek_while_speaking(self):
+        from whisper.vad import VoiceActivityDetector
+
+        vad = VoiceActivityDetector()
+        chunk1 = np.ones(512, dtype=np.float32) * 0.1
+        chunk2 = np.ones(512, dtype=np.float32) * 0.2
+        vad._speech_buffer = [chunk1, chunk2]
+        vad._is_speaking = True
+        result = vad.peek_buffer()
+        assert result is not None
+        assert len(result) == 1024
+        # Buffer should NOT be consumed
+        assert len(vad._speech_buffer) == 2
+
+    def test_speech_duration_ms(self):
+        from whisper.vad import VoiceActivityDetector
+
+        vad = VoiceActivityDetector(sample_rate=16000)
+        vad._speech_counter = 16000  # 1 second
+        assert vad.speech_duration_ms == 1000.0
+
+    def test_speech_duration_zero(self):
+        from whisper.vad import VoiceActivityDetector
+
+        vad = VoiceActivityDetector()
+        assert vad.speech_duration_ms == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Tests: Interim results configuration
+# ---------------------------------------------------------------------------
+
+
+class TestInterimResults:
+    """Tests for interim result configuration and state."""
+
+    def test_interim_disabled_by_default(self):
+        from whisper.streaming import StreamingTranscriber
+
+        t = StreamingTranscriber(model_size="large-v3-turbo", device="cpu")
+        assert t._interim_interval_ms is None
+
+    def test_interim_enabled(self):
+        from whisper.streaming import StreamingTranscriber
+
+        t = StreamingTranscriber(
+            model_size="large-v3-turbo",
+            device="cpu",
+            interim_interval_ms=1000,
+        )
+        assert t._interim_interval_ms == 1000
+
+    def test_reset_clears_interim_state(self):
+        from whisper.streaming import StreamingTranscriber
+
+        t = StreamingTranscriber(
+            model_size="large-v3-turbo",
+            device="cpu",
+            interim_interval_ms=500,
+        )
+        t._last_interim_speech_ms = 2000.0
+        t.reset()
+        assert t._last_interim_speech_ms == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Tests: Model pool (shared cache)
+# ---------------------------------------------------------------------------
+
+
+class TestModelPool:
+    """Tests for class-level model cache sharing."""
+
+    def test_cache_key_format(self):
+        """Two instances with same config should produce same cache key."""
+        from whisper.streaming import StreamingTranscriber
+
+        t1 = StreamingTranscriber(model_size="large-v3-turbo", device="cpu", compute_type="float32")
+        t2 = StreamingTranscriber(model_size="large-v3-turbo", device="cpu", compute_type="float32")
+        key1 = f"{t1.model_size}:{t1.device}:{t1.compute_type}"
+        key2 = f"{t2.model_size}:{t2.device}:{t2.compute_type}"
+        assert key1 == key2
+
+    def test_different_config_different_key(self):
+        from whisper.streaming import StreamingTranscriber
+
+        t1 = StreamingTranscriber(model_size="large-v3-turbo", device="cpu")
+        t2 = StreamingTranscriber(model_size="small", device="cpu")
+        key1 = f"{t1.model_size}:{t1.device}:{t1.compute_type}"
+        key2 = f"{t2.model_size}:{t2.device}:{t2.compute_type}"
+        assert key1 != key2
+
+    def test_different_languages_same_model(self):
+        """Different languages should share the model but have separate state."""
+        from whisper.streaming import StreamingTranscriber
+
+        t_it = StreamingTranscriber(model_size="large-v3-turbo", device="cpu", language="it")
+        t_en = StreamingTranscriber(model_size="large-v3-turbo", device="cpu", language="en")
+        assert t_it.language != t_en.language
+        # Both would use same cache key (model is language-agnostic)
+        key_it = f"{t_it.model_size}:{t_it.device}:{t_it.compute_type}"
+        key_en = f"{t_en.model_size}:{t_en.device}:{t_en.compute_type}"
+        assert key_it == key_en
+        # But they have separate VAD and context
+        assert t_it._vad is not t_en._vad
+        assert t_it._previous_tokens is not t_en._previous_tokens

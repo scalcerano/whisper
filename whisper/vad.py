@@ -5,7 +5,7 @@ Detects when the user starts and stops speaking, producing semantically
 coherent audio segments instead of fixed-size chunks.
 """
 
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import torch
@@ -199,10 +199,32 @@ class VoiceActivityDetector:
         if self._model is not None:
             self._model.reset_states()
 
+    def peek_buffer(self) -> Optional[np.ndarray]:
+        """Return the current speech buffer without consuming it.
+
+        Used by the streaming transcriber to generate interim results
+        while speech is still active. The buffer stays intact — only
+        ``process()`` or ``flush()`` will consume it.
+
+        Returns
+        -------
+        np.ndarray or None
+            Concatenated speech audio, or None if buffer is empty or
+            speech hasn't been confirmed yet.
+        """
+        if self._speech_buffer and self._is_speaking:
+            return np.concatenate(self._speech_buffer)
+        return None
+
     @property
     def is_speaking(self) -> bool:
         """Whether speech is currently being detected."""
         return self._is_speaking
+
+    @property
+    def speech_duration_ms(self) -> float:
+        """Duration of confirmed speech accumulated, in milliseconds."""
+        return self._speech_counter / self.sample_rate * 1000
 
     @property
     def buffered_duration_ms(self) -> float:
