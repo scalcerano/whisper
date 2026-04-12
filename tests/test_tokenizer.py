@@ -1,6 +1,6 @@
 import pytest
 
-from whisper.tokenizer import get_tokenizer
+from whisperng.tokenizer import get_tokenizer
 
 
 @pytest.mark.parametrize("multilingual", [True, False])

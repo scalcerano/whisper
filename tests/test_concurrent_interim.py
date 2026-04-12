@@ -6,8 +6,8 @@ import threading
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from whisper.audio import SAMPLE_RATE, load_audio
-from whisper.streaming import StreamingTranscriber
+from whisperng.audio import SAMPLE_RATE, load_audio
+from whisperng.streaming import StreamingTranscriber
 
 
 def run_session(session_id, audio, chunk_size, results_out, errors_out):

@@ -12,7 +12,7 @@ import os
 import numpy as np
 import pytest
 
-from whisper.audio import SAMPLE_RATE, log_mel_spectrogram_chunk
+from whisperng.audio import SAMPLE_RATE, log_mel_spectrogram_chunk
 
 
 # ---------------------------------------------------------------------------
@@ -33,7 +33,7 @@ def _generate_silence(duration_s: float) -> np.ndarray:
 
 def _load_jfk_audio() -> np.ndarray:
     """Load the JFK test audio file."""
-    from whisper.audio import load_audio
+    from whisperng.audio import load_audio
 
     audio_path = os.path.join(os.path.dirname(__file__), "jfk.flac")
     return load_audio(audio_path)
@@ -100,7 +100,7 @@ class TestVAD:
     """Tests for the Silero VAD wrapper."""
 
     def test_init_default_params(self):
-        from whisper.vad import VoiceActivityDetector
+        from whisperng.vad import VoiceActivityDetector
 
         vad = VoiceActivityDetector()
         assert vad.sample_rate == 16000
@@ -108,13 +108,13 @@ class TestVAD:
         assert vad.buffered_duration_ms == 0.0
 
     def test_invalid_sample_rate(self):
-        from whisper.vad import VoiceActivityDetector
+        from whisperng.vad import VoiceActivityDetector
 
         with pytest.raises(ValueError, match="not supported"):
             VoiceActivityDetector(sample_rate=44100)
 
     def test_reset_clears_state(self):
-        from whisper.vad import VoiceActivityDetector
+        from whisperng.vad import VoiceActivityDetector
 
         vad = VoiceActivityDetector()
         # Simulate some state
@@ -129,7 +129,7 @@ class TestVAD:
 
     def test_silence_produces_no_segments(self):
         """Pure silence should not produce any speech segments."""
-        from whisper.vad import VoiceActivityDetector
+        from whisperng.vad import VoiceActivityDetector
 
         vad = VoiceActivityDetector()
         silence = _generate_silence(2.0)
@@ -138,7 +138,7 @@ class TestVAD:
         assert len(segments) == 0
 
     def test_flush_empty_buffer(self):
-        from whisper.vad import VoiceActivityDetector
+        from whisperng.vad import VoiceActivityDetector
 
         vad = VoiceActivityDetector()
         segments = vad.flush()
@@ -154,7 +154,7 @@ class TestStreamingTranscriber:
     """Tests for the StreamingTranscriber configuration and state."""
 
     def test_init_valid_config(self):
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         t = StreamingTranscriber(
             model_size="large-v3",
@@ -167,19 +167,19 @@ class TestStreamingTranscriber:
         assert t.device == "cpu"
 
     def test_init_invalid_model(self):
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         with pytest.raises(ValueError, match="Unsupported model size"):
             StreamingTranscriber(model_size="nonexistent")
 
     def test_init_invalid_compute_type(self):
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         with pytest.raises(ValueError, match="Unsupported compute type"):
             StreamingTranscriber(compute_type="quantum")
 
     def test_reset_clears_context(self):
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         t = StreamingTranscriber(model_size="large-v3", device="cpu")
         t._previous_tokens = [1, 2, 3]
@@ -192,7 +192,7 @@ class TestStreamingTranscriber:
         assert t._total_audio_ms == 0.0
 
     def test_stats_empty(self):
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         t = StreamingTranscriber(model_size="large-v3", device="cpu")
         stats = t.stats
@@ -203,7 +203,7 @@ class TestStreamingTranscriber:
 
     def test_all_supported_languages(self):
         """All 6 target languages should be accepted."""
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         for lang in ["it", "en", "de", "fr", "es", "pt"]:
             t = StreamingTranscriber(
@@ -214,7 +214,7 @@ class TestStreamingTranscriber:
             assert t.language == lang
 
     def test_initial_prompt_stored(self):
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         t = StreamingTranscriber(
             model_size="large-v3",
@@ -225,7 +225,7 @@ class TestStreamingTranscriber:
 
     def test_telephony_hints_prompt(self):
         """telephony_hints=True should prepend telephony vocabulary."""
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         t = StreamingTranscriber(
             model_size="large-v3",
@@ -236,7 +236,7 @@ class TestStreamingTranscriber:
         assert "@" in t.initial_prompt
 
     def test_telephony_hints_combined_with_user_prompt(self):
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         t = StreamingTranscriber(
             model_size="large-v3",
@@ -248,27 +248,27 @@ class TestStreamingTranscriber:
         assert "immobiliare" in t.initial_prompt
 
     def test_no_telephony_hints_default(self):
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         t = StreamingTranscriber(model_size="large-v3", device="cpu")
         assert t.initial_prompt is None
 
     def test_previous_tokens_empty_at_init(self):
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         t = StreamingTranscriber(model_size="large-v3", device="cpu")
         assert t._previous_tokens == []
 
     def test_n_mels_large_v3(self):
         """Large-v3 uses 128 mel filters."""
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         t = StreamingTranscriber(model_size="large-v3", device="cpu")
         assert t._n_mels == 128
 
     def test_n_mels_small(self):
         """Smaller models use 80 mel filters."""
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         t = StreamingTranscriber(model_size="small", device="cpu")
         assert t._n_mels == 80
@@ -281,7 +281,7 @@ class TestStreamingTranscriber:
 
 class TestTranscriptionResult:
     def test_dataclass_fields(self):
-        from whisper.streaming import TranscriptionResult
+        from whisperng.streaming import TranscriptionResult
 
         r = TranscriptionResult(
             text="Ciao mondo",
@@ -296,7 +296,7 @@ class TestTranscriptionResult:
         assert r.no_speech_prob == 0.0  # default
 
     def test_confidence_and_no_speech(self):
-        from whisper.streaming import TranscriptionResult
+        from whisperng.streaming import TranscriptionResult
 
         r = TranscriptionResult(
             text="test",
@@ -310,7 +310,7 @@ class TestTranscriptionResult:
         assert r.no_speech_prob == 0.02
 
     def test_interim_result(self):
-        from whisper.streaming import TranscriptionResult
+        from whisperng.streaming import TranscriptionResult
 
         r = TranscriptionResult(
             text="partial",
@@ -331,7 +331,7 @@ class TestAudioNormalization:
     """Tests for automatic audio format normalization."""
 
     def test_int16_to_float32(self):
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         audio_int16 = np.array([0, 16384, -16384, 32767], dtype=np.int16)
         result = StreamingTranscriber._normalize_audio(audio_int16, 16000)
@@ -340,7 +340,7 @@ class TestAudioNormalization:
         assert abs(result[3] - 1.0) < 0.001
 
     def test_stereo_to_mono(self):
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         stereo = np.array([[0.5, -0.5], [0.3, -0.3]], dtype=np.float32)
         result = StreamingTranscriber._normalize_audio(stereo, 16000)
@@ -348,7 +348,7 @@ class TestAudioNormalization:
         assert abs(result[0]) < 0.001  # (0.5 + -0.5) / 2
 
     def test_passthrough_float32_16khz(self):
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         audio = np.array([0.1, 0.2, 0.3], dtype=np.float32)
         result = StreamingTranscriber._normalize_audio(audio, 16000)
@@ -356,7 +356,7 @@ class TestAudioNormalization:
         np.testing.assert_array_equal(result, audio)
 
     def test_resample_8khz(self):
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         # 8kHz sine wave, 0.1 seconds = 800 samples
         t = np.linspace(0, 0.1, 800, dtype=np.float32)
@@ -367,7 +367,7 @@ class TestAudioNormalization:
         assert result.dtype == np.float32
 
     def test_resample_48khz(self):
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         # 48kHz, 0.1 seconds = 4800 samples
         t = np.linspace(0, 0.1, 4800, dtype=np.float32)
@@ -386,13 +386,13 @@ class TestVADPeekBuffer:
     """Tests for VAD buffer peeking (used by interim results)."""
 
     def test_peek_empty_buffer(self):
-        from whisper.vad import VoiceActivityDetector
+        from whisperng.vad import VoiceActivityDetector
 
         vad = VoiceActivityDetector()
         assert vad.peek_buffer() is None
 
     def test_peek_not_speaking(self):
-        from whisper.vad import VoiceActivityDetector
+        from whisperng.vad import VoiceActivityDetector
 
         vad = VoiceActivityDetector()
         vad._speech_buffer = [np.zeros(480)]
@@ -400,7 +400,7 @@ class TestVADPeekBuffer:
         assert vad.peek_buffer() is None  # not confirmed speech
 
     def test_peek_while_speaking(self):
-        from whisper.vad import VoiceActivityDetector
+        from whisperng.vad import VoiceActivityDetector
 
         vad = VoiceActivityDetector()
         chunk1 = np.ones(512, dtype=np.float32) * 0.1
@@ -414,14 +414,14 @@ class TestVADPeekBuffer:
         assert len(vad._speech_buffer) == 2
 
     def test_speech_duration_ms(self):
-        from whisper.vad import VoiceActivityDetector
+        from whisperng.vad import VoiceActivityDetector
 
         vad = VoiceActivityDetector(sample_rate=16000)
         vad._speech_counter = 16000  # 1 second
         assert vad.speech_duration_ms == 1000.0
 
     def test_speech_duration_zero(self):
-        from whisper.vad import VoiceActivityDetector
+        from whisperng.vad import VoiceActivityDetector
 
         vad = VoiceActivityDetector()
         assert vad.speech_duration_ms == 0.0
@@ -436,13 +436,13 @@ class TestInterimResults:
     """Tests for interim result configuration and state."""
 
     def test_interim_disabled_by_default(self):
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         t = StreamingTranscriber(model_size="large-v3-turbo", device="cpu")
         assert t._interim_interval_ms is None
 
     def test_interim_enabled(self):
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         t = StreamingTranscriber(
             model_size="large-v3-turbo",
@@ -452,7 +452,7 @@ class TestInterimResults:
         assert t._interim_interval_ms == 1000
 
     def test_reset_clears_interim_state(self):
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         t = StreamingTranscriber(
             model_size="large-v3-turbo",
@@ -474,7 +474,7 @@ class TestModelPool:
 
     def test_cache_key_format(self):
         """Two instances with same config should produce same cache key."""
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         t1 = StreamingTranscriber(model_size="large-v3-turbo", device="cpu", compute_type="float32")
         t2 = StreamingTranscriber(model_size="large-v3-turbo", device="cpu", compute_type="float32")
@@ -483,7 +483,7 @@ class TestModelPool:
         assert key1 == key2
 
     def test_different_config_different_key(self):
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         t1 = StreamingTranscriber(model_size="large-v3-turbo", device="cpu")
         t2 = StreamingTranscriber(model_size="small", device="cpu")
@@ -493,7 +493,7 @@ class TestModelPool:
 
     def test_different_languages_same_model(self):
         """Different languages should share the model but have separate state."""
-        from whisper.streaming import StreamingTranscriber
+        from whisperng.streaming import StreamingTranscriber
 
         t_it = StreamingTranscriber(model_size="large-v3-turbo", device="cpu", language="it")
         t_en = StreamingTranscriber(model_size="large-v3-turbo", device="cpu", language="en")

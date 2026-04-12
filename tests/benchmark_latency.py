@@ -2,9 +2,9 @@
 
 import time
 import numpy as np
-from whisper.audio import load_audio, SAMPLE_RATE
-from whisper.streaming import StreamingTranscriber
-from whisper.vad import VoiceActivityDetector
+from whisperng.audio import load_audio, SAMPLE_RATE
+from whisperng.streaming import StreamingTranscriber
+from whisperng.vad import VoiceActivityDetector
 
 
 def main():

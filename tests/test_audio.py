@@ -2,7 +2,7 @@ import os.path
 
 import numpy as np
 
-from whisper.audio import SAMPLE_RATE, load_audio, log_mel_spectrogram
+from whisperng.audio import SAMPLE_RATE, load_audio, log_mel_spectrogram
 
 
 def test_audio():

@@ -1,8 +1,8 @@
 """Test streaming transcription with Italian audio."""
 
 import numpy as np
-from whisper.audio import load_audio, SAMPLE_RATE
-from whisper.streaming import StreamingTranscriber
+from whisperng.audio import load_audio, SAMPLE_RATE
+from whisperng.streaming import StreamingTranscriber
 
 
 def main():

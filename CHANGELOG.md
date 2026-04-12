@@ -51,7 +51,7 @@
 * **Variable-length mel spectrogram** (`whisper/audio.py`) — `log_mel_spectrogram_chunk()` utility function
 * **Telephony hints** — `telephony_hints=True` parameter for email/address/phone spelling recognition
 * **CUDA warmup** — dummy inference at model load to eliminate first-segment cold start
-* Optional dependency: `faster-whisper>=1.1.0` via `pip install openai-whisper[streaming]`
+* Optional dependency: `faster-whisper>=1.1.0` via `pip install whisper-ng[streaming]`
 * Test suite: `tests/test_streaming.py` (25 tests), `tests/test_e2e_streaming.py`, `tests/benchmark_latency.py`
 * Docker support with GPU passthrough (`Dockerfile`)
 
@@ -184,4 +184,4 @@
 
 ## [v20230117](https://github.com/openai/whisper/releases/tag/v20230117)
 
-The first versioned release available on [PyPI](https://pypi.org/project/openai-whisper/)
+The first versioned release available on [PyPI](https://pypi.org/project/whisper-ng/)

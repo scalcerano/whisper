@@ -4,16 +4,15 @@ build-backend = "setuptools.build_meta"
 requires = [ "setuptools>=61.2" ]
 
 [project]
-name = "openai-whisper"
-description = "Robust Speech Recognition via Large-Scale Weak Supervision"
+name = "whisper-ng"
+description = "Real-time streaming speech recognition for telephony, based on OpenAI Whisper"
 readme.content-type = "text/markdown"
 readme.file = "README.md"
 license = { text = "MIT" }
-authors = [ { name = "OpenAI" } ]
-requires-python = ">=3.8"
+authors = [ { name = "Salvatore Calcerano" } ]
+requires-python = ">=3.9"
 classifiers = [
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.8",
   "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
@@ -30,17 +29,20 @@ dependencies = [
   "tqdm",
   "triton>=2; (platform_machine=='x86_64' and sys_platform=='linux') or sys_platform=='linux2'",
 ]
-optional-dependencies.streaming = [ "faster-whisper>=1.1.0" ]
+optional-dependencies.streaming = [
+  "faster-whisper>=1.1.0",
+  "torchaudio",
+]
 optional-dependencies.dev = [ "black", "flake8", "isort", "pytest", "scipy" ]
-urls = { Homepage = "https://github.com/openai/whisper" }
-scripts.whisper = "whisper.transcribe:cli"
+urls = { Homepage = "https://github.com/scalcerano/whisper-ng" }
+scripts.whisper-ng = "whisperng.transcribe:cli"
 
 [tool.setuptools]
-py-modules = [ "whisper" ]
+py-modules = [ "whisperng" ]
 include-package-data = true
 
 [tool.setuptools.dynamic]
-version = { attr = "whisper.version.__version__" }
+version = { attr = "whisperng.version.__version__" }
 
 [tool.setuptools.packages.find]
 exclude = [ "tests*" ]
