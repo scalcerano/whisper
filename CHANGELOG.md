@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## [streaming-v3] — 2026-04-12 (scalcerano fork)
+
+### Added
+* **Confidence scores** — `TranscriptionResult.confidence` (0.0–1.0) from decoder avg logprob, `no_speech_prob` from decoder. Enables "can you repeat?" logic downstream.
+* **Automatic audio normalization** — `feed()` accepts int16/float32, mono/stereo, any sample rate. Auto-converts to float32 mono 16kHz via torchaudio.
+* **Interim results** — `interim_interval_ms` parameter. Emits `is_final=False` partial transcriptions during active speech without waiting for end-of-utterance. Context preserved across interims.
+* **Shared model pool** — CTranslate2 model cached at class level. Multiple `StreamingTranscriber` instances with same config share one model in VRAM. 10 concurrent calls = 6GB VRAM instead of 60GB.
+
+### Tests
+* 42 unit tests (was 25): confidence, resampling, VAD peek, interim config, model pool sharing
+
 ## [streaming-v2] — 2026-04-12 (scalcerano fork)
 
 ### Fixed — Critical STT comprehension failure

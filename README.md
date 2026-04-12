@@ -325,7 +325,77 @@ StreamingTranscriber(
     # Prompting — helps with domain-specific vocabulary
     initial_prompt="immobiliare, mutuo, rogito",  # domain terms
     telephony_hints=True,        # adds email/address/phone spelling vocabulary
+
+    # Interim results — partial transcriptions during active speech
+    interim_interval_ms=1000,    # emit interim every 1s of speech (None=disabled)
 )
+```
+
+### Interim results
+
+By default, the system waits for end-of-speech (silence) before emitting text.
+With `interim_interval_ms`, you get partial results while the user is still talking:
+
+```python
+transcriber = StreamingTranscriber(
+    model_size="large-v3-turbo",
+    device="cuda",
+    compute_type="int8",
+    language="it",
+    interim_interval_ms=1000,  # emit partial results every 1 second of speech
+)
+
+for pcm_chunk in audio_stream:
+    for r in transcriber.feed(pcm_chunk):
+        if r.is_final:
+            print(f"[FINAL] {r.text}")
+        else:
+            print(f"[interim conf={r.confidence:.2f}] {r.text}")
+```
+
+Interim results have `is_final=False` and don't affect cross-segment context.
+Each interim replaces the previous one. The final result is the definitive version.
+
+### Confidence scores
+
+Every `TranscriptionResult` includes a confidence score for downstream decision-making:
+
+```python
+for r in transcriber.feed(chunk):
+    if r.confidence < 0.3:
+        ask_caller_to_repeat()
+    elif r.confidence > 0.8:
+        process_with_high_confidence(r.text)
+```
+
+### Audio format handling
+
+`feed()` accepts any common audio format — no pre-processing needed:
+
+```python
+# 8kHz int16 from PSTN — auto-resampled and converted
+transcriber.feed(pstn_audio_int16, sample_rate=8000)
+
+# 48kHz float32 from VoIP — auto-resampled
+transcriber.feed(voip_audio_float32, sample_rate=48000)
+
+# Stereo — auto-mixed to mono
+transcriber.feed(stereo_audio)
+```
+
+### Concurrent calls (model pool)
+
+Multiple `StreamingTranscriber` instances with the same model config automatically
+share a single model in VRAM. Each instance keeps its own VAD, language, and context:
+
+```python
+# These two share one model in VRAM (~6GB total, not 12GB)
+call_1 = StreamingTranscriber(language="it")
+call_2 = StreamingTranscriber(language="en")
+
+# Independent state — each call has its own VAD and context
+call_1.feed(audio_from_caller_1)
+call_2.feed(audio_from_caller_2)
 ```
 
 ### TranscriptionResult fields
@@ -336,7 +406,9 @@ StreamingTranscriber(
 | `language` | str | Language code (e.g. "it") |
 | `duration_ms` | float | Duration of the speech segment |
 | `latency_ms` | float | Processing time (audio received to text produced) |
-| `is_final` | bool | Always True (interim results not yet supported) |
+| `confidence` | float | Transcription confidence 0.0–1.0 (from decoder logprob) |
+| `no_speech_prob` | float | Probability of no speech 0.0–1.0 |
+| `is_final` | bool | True for completed segments, False for interim partials |
 
 ### Supported languages
 
