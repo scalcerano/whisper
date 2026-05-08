@@ -34,7 +34,7 @@ optional-dependencies.streaming = [
   "torchaudio",
 ]
 optional-dependencies.dev = [ "black", "flake8", "isort", "pytest", "scipy" ]
-urls = { Homepage = "https://github.com/scalcerano/whisper-ng" }
+urls = { Homepage = "https://github.com/oasi-systems/whisper-ng", Repository = "https://github.com/oasi-systems/whisper-ng" }
 scripts.whisper-ng = "whisperng.transcribe:cli"
 
 [tool.setuptools]

@@ -23,7 +23,7 @@ A Transformer sequence-to-sequence model is trained on various speech processing
 Python 3.9+ and [PyTorch](https://pytorch.org/) with CUDA are required. Install from this repository:
 
 ```bash
-pip install git+https://github.com/scalcerano/whisper-ng.git
+pip install git+https://github.com/oasi-systems/whisper-ng.git
 pip install faster-whisper torchaudio
 ```
 
@@ -126,7 +126,7 @@ This fork adds a streaming STT module optimized for real-time telephony. It comb
 
 ```bash
 # 1. Install this fork
-pip install git+https://github.com/scalcerano/whisper-ng.git
+pip install git+https://github.com/oasi-systems/whisper-ng.git
 
 # 2. Install streaming dependencies
 pip install faster-whisper torchaudio
